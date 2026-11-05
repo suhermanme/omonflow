@@ -886,24 +886,40 @@ class SettingsWindow(QWidget):
         rec = QGroupBox("Recognition")
         g = QGridLayout(rec)
         self.lang_combo = QComboBox()
-        for code, label in (("auto", "Detect automatically (Indonesian or English)"), ("en", "English"),
-                            ("id", "Indonesian (Bahasa Indonesia)")):
+        for code, label in (("auto", "Automatic: English or Indonesian, as spoken"), ("en", "Always English"),
+                            ("id", "Always Indonesian (Bahasa Indonesia)"), ("any", "Automatic: any language")):
             self.lang_combo.addItem(label, code)
         self.lang_combo.setCurrentIndex(max(0, self.lang_combo.findData(self.settings.language)))
         self.lang_combo.currentIndexChanged.connect(self._lang_changed)
-        self.prompt_check = QCheckBox("Help recognition of mixed Indonesian–English and technical words "
-                                      "(GPU, Docker, Linux, …)")
+        self.prefer_combo = QComboBox()
+        for code, label in (("none", "No preference"), ("en", "English"), ("id", "Indonesian")):
+            self.prefer_combo.addItem(label, code)
+        self.prefer_combo.setCurrentIndex(max(0, self.prefer_combo.findData(self.settings.prefer_language)))
+        self.prefer_combo.currentIndexChanged.connect(self._prefer_changed)
+        lang_note = QLabel("Text is written in the language you spoke; it is never translated. When Whisper is "
+                           "unsure, OmonFlow transcribes in both English and Indonesian and keeps the version Whisper "
+                           "is most confident about.")
+        lang_note.setWordWrap(True)
+        lang_note.setStyleSheet("color: gray")
+        self.prompt_check = QCheckBox("Help recognition of technical words (GPU, Docker, Linux, …)")
         self.prompt_check.setChecked(self.settings.bilingual_prompt)
         self.prompt_check.toggled.connect(self._prompt_changed)
         g.addWidget(QLabel("Language:"), 0, 0)
         g.addWidget(self.lang_combo, 0, 1)
-        g.addWidget(self.prompt_check, 1, 0, 1, 2)
+        g.addWidget(lang_note, 1, 0, 1, 2)
+        g.addWidget(QLabel("If both fit equally, prefer:"), 2, 0)
+        g.addWidget(self.prefer_combo, 2, 1)
+        g.addWidget(self.prompt_check, 3, 0, 1, 2)
         lay.addWidget(rec)
         lay.addStretch(1)
         return page
 
     def _lang_changed(self) -> None:
         self.settings.language = self.lang_combo.currentData()
+        self.behavior_changed.emit()
+
+    def _prefer_changed(self) -> None:
+        self.settings.prefer_language = self.prefer_combo.currentData()
         self.behavior_changed.emit()
 
     def _prompt_changed(self, on: bool) -> None:

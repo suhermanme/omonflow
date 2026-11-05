@@ -269,9 +269,15 @@ class OmonFlowApp:
 
     # ------------------------------------------------------------ dictation pipeline
     def _transcribe(self, wav: bytes, timeout_s: float) -> str:
-        from omonflow.stt.server import BILINGUAL_PROMPT
-        prompt = BILINGUAL_PROMPT if self.settings.bilingual_prompt else None
-        return self.whisper.transcribe(wav, timeout_s, language=self.settings.language, prompt=prompt)
+        from omonflow.stt.server import VOCAB_PROMPT
+        prompt = VOCAB_PROMPT if self.settings.bilingual_prompt else None
+        lang = self.settings.language
+        if lang in ("auto", "any"):
+            allowed = ("en", "id") if lang == "auto" else ()
+            prefer = None if self.settings.prefer_language == "none" else self.settings.prefer_language
+            return self.whisper.transcribe(wav, timeout_s, language="auto", prompt=prompt, allowed=allowed,
+                                           prefer=prefer)
+        return self.whisper.transcribe(wav, timeout_s, language=lang, prompt=prompt)
 
     def _options(self) -> dict:
         return {"strategy": self.settings.insertion_strategy, "restore_clipboard": self.settings.restore_clipboard,
@@ -365,8 +371,8 @@ class OmonFlowApp:
             self.orch.dismiss() if self.orch.state == State.ERROR else self.orch.cancel()
 
     def _state_changed(self, state: str) -> None:
-        self.widget.set_error_payload(bool(self.orch.transcript), self.orch.retry_action is not None,
-                                      self.orch.error_label)
+        label = self.orch.widget_label if state == State.SUCCESS.value else self.orch.error_label
+        self.widget.set_error_payload(bool(self.orch.transcript), self.orch.retry_action is not None, label)
         self.widget.set_state(state)
         self.tray.set_state(state, self.orch.can_cancel())
         if state == State.ERROR.value and self.orch.error_text:

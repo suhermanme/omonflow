@@ -49,7 +49,7 @@ def test_start_ready_backend_and_transcribe(fake_exe, tmp_path, model):
     assert st.state == "ready" and st.port and st.pid and st.start_ms > 0
     assert st.backend == "Metal"
     assert json.loads(s.pidfile.read_text())["pid"] == st.pid
-    assert s.transcribe(b"RIFF....")["text"].endswith("[ggml-tiny.bin]")
+    assert "[ggml-tiny.bin]" in s.transcribe(b"RIFF....")["text"]
     s.stop()
     assert s.status.state == "stopped" and not s.pidfile.exists()
 
@@ -179,3 +179,40 @@ def test_model_that_crashes_server_restores_previous(fake_exe, tmp_path, model):
     assert s.status.state == "ready" and s.status.model == str(model) and s.status.restarts == 1
     assert "ggml-tiny.bin" in s.transcribe(b"x")["text"]
     s.stop()
+
+
+@pytest.mark.parametrize("auto,logprobs,allowed,prefer,chosen,passes", [
+    ("en", "en:-0.02,id:-0.40", ("en", "id"), None, "en", 1),    # confident English: one pass
+    ("id", "en:-0.40,id:-0.03", ("en", "id"), None, "id", 1),    # confident Indonesian: one pass
+    ("id", "en:-0.04,id:-0.30", ("en", "id"), None, "en", 2),    # English misheard as Indonesian: fixed
+    ("en", "en:-0.35,id:-0.05", ("en", "id"), None, "id", 2),    # Indonesian misheard as English: fixed
+    ("id", "en:-0.20,id:-0.21", ("en", "id"), "en", "en", 2),    # near-tie: the preference decides
+    ("id", "en:-0.60,id:-0.20", ("en", "id"), "en", "id", 2),    # preference never forces a translation
+    ("ms", "en:-0.50,id:-0.10,ms:-0.05", ("en", "id"), None, "id", 3),  # Malay is not one of the user's languages
+    ("ms", "ms:-0.05", (), None, "ms", 1),                         # "any language" keeps Whisper's choice
+])
+def test_language_is_the_one_spoken(fake_exe, tmp_path, model, monkeypatch, auto, logprobs, allowed, prefer,
+                                    chosen, passes):
+    monkeypatch.setenv("FAKE_AUTO_LANG", auto)
+    monkeypatch.setenv("FAKE_LOGPROBS", logprobs)
+    s = make(fake_exe, tmp_path)
+    s.start(model)
+    try:
+        r = s.transcribe_auto(b"RIFF", allowed=allowed, prefer=prefer)
+        assert (r["chosen"], r["passes"]) == (chosen, passes)
+        assert f"[lang={chosen}]" in r["text"]  # the inserted text is the one in the chosen language
+    finally:
+        s.stop()
+
+
+def test_logs_never_contain_the_text(fake_exe, tmp_path, model, caplog):
+    import logging
+    caplog.set_level(logging.INFO, logger="omonflow.whisper")
+    s = make(fake_exe, tmp_path)
+    s.start(model)
+    try:
+        s.transcribe_auto(b"RIFF")
+        assert any("language:" in r.message for r in caplog.records)
+        assert not any("ask not" in r.getMessage() for r in caplog.records)
+    finally:
+        s.stop()

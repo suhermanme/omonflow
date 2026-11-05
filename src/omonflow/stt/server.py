@@ -33,8 +33,17 @@ from pathlib import Path
 
 LOG = logging.getLogger("omonflow.whisper")
 
-BILINGUAL_PROMPT = ("Bahasa Indonesia and English mixed conversation. GPU, VRAM, CPU, Docker, Proxmox, Linux, "
-                    "macOS, server, utilization, memory, AI, LLM, model, coding, network.")
+# Vocabulary hint only. It deliberately names no language: an earlier hint that
+# began "Bahasa Indonesia and English mixed conversation" nudged English
+# dictation into Indonesian. The language is decided separately (transcribe_auto).
+VOCAB_PROMPT = ("GPU, VRAM, CPU, Docker, Proxmox, Linux, macOS, server, utilization, memory, AI, LLM, model, "
+                "deploy, production, coding, network.")
+BILINGUAL_PROMPT = VOCAB_PROMPT  # backwards-compatible name
+CONFIDENT_LOGPROB = -0.15  # mean token log-prob above which Whisper's language choice is accepted
+TIE_LOGPROB = 0.02         # differences below this are ties (the preferred language wins)
+LANG_CODES = {"english": "en", "indonesian": "id", "malay": "ms", "javanese": "jw", "sundanese": "su",
+              "tagalog": "tl", "dutch": "nl", "welsh": "cy", "chinese": "zh", "japanese": "ja", "korean": "ko",
+              "arabic": "ar", "spanish": "es", "french": "fr", "german": "de"}
 EVIDENCE = re.compile(r"using (\w+) backend|ggml_metal_init: found device|ggml_cuda_init: found|"
                       r"ggml_vulkan: Found|system_info|no GPU found|whisper_backend_init", re.I)
 RESTART_LIMIT = 3            # restarts allowed ...
@@ -389,6 +398,68 @@ class WhisperServer:
         if "error" in data:
             raise WhisperError(f"transcription failed: {data['error']}")
         return {"text": (data.get("text") or "").strip(), "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+
+    def transcribe_auto(self, wav: bytes, allowed: tuple[str, ...] = ("en", "id"), prefer: str | None = None,
+                        prompt: str | None = VOCAB_PROMPT, timeout_s: float = 120,
+                        confident: float = CONFIDENT_LOGPROB) -> dict:
+        """Transcribe in the language actually spoken; never translate.
+
+        When Whisper decodes in the wrong language it *translates* (seen in M06:
+        English speech written as Indonesian and vice versa). So:
+          1. Let Whisper choose. If it chose one of `allowed` with confidence
+             (mean token log-probability >= `confident`), use it: one pass.
+          2. Otherwise also transcribe in the other allowed language(s) and keep
+             the most confident version (a translation scores clearly lower).
+          3. `prefer` only breaks near-ties; it can never force a translation.
+        `allowed=()` keeps Whisper's own choice (any language).
+        """
+        def run(lang: str, fallback: bool) -> tuple[str, float, str | None, float]:
+            fields = {"language": lang, "response_format": "verbose_json", "temperature": "0.0",
+                      "no_language_probabilities": "true"}
+            if not fallback:
+                fields["temperature_inc"] = "0.0"  # comparison pass: no slow temperature fallback
+            if prompt:
+                fields.update(prompt=prompt, carry_initial_prompt="true")
+            data, ms = self._post_inference(wav, fields, timeout_s)
+            segs = data.get("segments") or []
+            n = sum(len(x.get("tokens") or []) for x in segs)
+            lp = sum((x.get("avg_logprob") or 0.0) * len(x.get("tokens") or []) for x in segs) / n if n else -9.0
+            code = LANG_CODES.get(str(data.get("language", "")).lower(), lang if lang != "auto" else None)
+            return (data.get("text") or "").strip(), lp, code, ms
+
+        text, lp, used, ms = run("auto", True)
+        results = {used: (lp, text)}
+        total_ms, passes = ms, 1
+        if allowed and not (used in allowed and lp >= confident):
+            for lang in allowed:
+                if lang not in results:
+                    t2, lp2, _, ms2 = run(lang, False)
+                    results[lang] = (lp2, t2)
+                    total_ms += ms2
+                    passes += 1
+        candidates = {k: v for k, v in results.items() if not allowed or k in allowed} or results
+        chosen = max(candidates, key=lambda k: candidates[k][0])
+        if prefer in candidates and prefer != chosen and candidates[chosen][0] - candidates[prefer][0] < TIE_LOGPROB:
+            chosen = prefer
+        scores = {k: round(v[0], 3) for k, v in results.items()}
+        LOG.info("language: whisper=%s chosen=%s logprob=%s passes=%d", used, chosen, scores, passes)  # never text
+        return {"text": candidates[chosen][1], "elapsed_ms": round(total_ms, 1), "language": used, "chosen": chosen,
+                "logprobs": scores, "passes": passes}
+
+    def _post_inference(self, wav: bytes, fields: dict, timeout_s: float) -> tuple[dict, float]:
+        body, ctype = _multipart(fields, {"file": ("audio.wav", wav, "audio/wav")})
+        req = urllib.request.Request(self._url("/inference"), data=body, headers={"Content-Type": ctype})
+        t0 = time.perf_counter()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout_s) as r:
+                data = json.load(r)
+        except urllib.error.HTTPError as exc:
+            raise WhisperError(f"transcription failed: HTTP {exc.code}") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise WhisperError(f"transcription failed: {exc}") from exc
+        if "error" in data:
+            raise WhisperError(f"transcription failed: {data['error']}")
+        return data, round((time.perf_counter() - t0) * 1000, 1)
 
     # ------------------------------------------------------------ helpers
     def _read_evidence(self) -> None:

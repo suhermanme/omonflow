@@ -5,6 +5,8 @@ Behaviour via environment variables:
   FAKE_CRASH_AFTER  exit(3) this many seconds after becoming ready
   FAKE_BACKEND      backend name in the log (default MTL0); "none" → no GPU
   FAKE_DEVICES      comma list of NAME:TYPE listed at start (default "BLAS:3,<FAKE_BACKEND>:1")
+  FAKE_AUTO_LANG    language whisper picks in auto mode (default en)
+  FAKE_LOGPROBS     e.g. "en:-0.02,id:-0.40,ms:-0.5" — mean log-prob when decoding in each language
 """
 
 import argparse
@@ -84,8 +86,18 @@ class H(BaseHTTPRequestHandler):
             ok = load(field(body, "model"))
             self._json(200, {}) if ok else self._json(500, {"error": "failed to load model"})
         elif self.path == args.inference_path:
+            names = {"en": "english", "id": "indonesian", "ms": "malay"}
+            lps = dict((k, float(v)) for k, v in (p.split(":") for p in
+                       os.environ.get("FAKE_LOGPROBS", "en:-0.02,id:-0.40,ms:-0.50").split(",")))
+            lang = field(body, "language") or "auto"
+            used = os.environ.get("FAKE_AUTO_LANG", "en") if lang == "auto" else lang
             # Contains the self-test words of the bundled jfk.wav sample.
-            self._json(200, {"text": f" And so, ask not what your country can do for you. [{os.path.basename(state['model'])}] "})
+            text = f" And so, ask not what your country can do for you. [{os.path.basename(state['model'])}] [lang={used}] "
+            if field(body, "response_format") == "verbose_json":
+                self._json(200, {"text": text, "language": names.get(used, used),
+                                 "segments": [{"tokens": [1] * 10, "avg_logprob": lps.get(used, -1.0)}]})
+            else:
+                self._json(200, {"text": text})
         else:
             self._json(404, {})
 

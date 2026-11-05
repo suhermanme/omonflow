@@ -62,8 +62,9 @@ class Settings:
     whisper_threads: int = 0              # 0 = automatic
     profile: str = "balanced"             # fast | balanced | accurate | custom
     unload_idle_min: int = 0              # 0 = keep the model loaded
-    language: str = "auto"                # auto | en | id
-    bilingual_prompt: bool = True         # Indonesian–English technical vocabulary hint
+    language: str = "auto"                # auto (English or Indonesian) | any | en | id
+    prefer_language: str = "none"         # when unsure between English and Indonesian: none | en | id
+    bilingual_prompt: bool = True         # technical-vocabulary hint (names no language)
     insertion_strategy: str = "auto"      # auto | paste | type
     restore_clipboard: bool = True
     history_enabled: bool = True

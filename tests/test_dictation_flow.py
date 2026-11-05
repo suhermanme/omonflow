@@ -12,7 +12,7 @@ from omonflow.core.states import State
 from omonflow.insertion.base import InsertResult, Target
 from omonflow.storage.history import History
 
-FAST = {"success_hold": 5}
+FAST = {"success_hold": 5, "success_copy_hold": 300}
 
 
 class FakeTranscriber:
@@ -199,3 +199,23 @@ def test_history_off_stores_nothing(qapp, tmp_path):
 def test_transcript_cleanup():
     assert clean_transcript(" [BLANK_AUDIO]  halo   dunia (music) ") == "halo dunia"
     assert is_silence_phrase("Thank you.") and not is_silence_phrase("Thank you for the PR")
+
+
+def test_unverifiable_insertion_offers_copy_for_a_moment(qapp):
+    ins = FakeInserter(InsertResult("inserted", "paste", None))  # e.g. Chrome: cannot confirm
+    o = make(FakeTranscriber(["teks panjang dari Chrome"]), ins)
+    dictate(qapp, o)
+    wait_until(qapp, lambda: o.state == State.SUCCESS, 5000)
+    assert o.transcript == "teks panjang dari Chrome" and o.widget_label == "Done · click to copy"
+    o.primary()  # one click copies
+    from PySide6.QtGui import QGuiApplication
+    assert QGuiApplication.clipboard().text() == "teks panjang dari Chrome"
+    wait_until(qapp, lambda: o.state == State.IDLE, 5000)
+    assert o.transcript is None and o.widget_label is None
+
+
+def test_verified_insertion_clears_text_immediately(qapp):
+    o = make(FakeTranscriber(["ok"]), FakeInserter(InsertResult("inserted", "accessibility", True)))
+    dictate(qapp, o)
+    wait_until(qapp, lambda: o.state == State.SUCCESS, 5000)
+    assert o.transcript is None and o.widget_label is None

@@ -29,7 +29,7 @@ from omonflow.app.orchestrator import Orchestrator  # noqa: E402
 from omonflow.audio.rust_backend import RustAudio  # noqa: E402
 from omonflow.core.states import State  # noqa: E402
 from omonflow.platform.macos.insert import MacInserter  # noqa: E402
-from omonflow.stt.server import BILINGUAL_PROMPT, WhisperServer, find_executable  # noqa: E402
+from omonflow.stt.server import VOCAB_PROMPT, WhisperServer, find_executable  # noqa: E402
 
 CORPUS = [
     ("en", "Samantha", "Please deploy the new Docker image to the staging server today."),
@@ -82,8 +82,8 @@ def main():
     ins.insert = spy
     if not ins.trusted():
         sys.exit("Accessibility permission required")
-    orch = Orchestrator(RustAudio(), {"success_hold": 50}, transcriber=lambda wav, t: srv.transcribe(
-        wav, language="auto", prompt=BILINGUAL_PROMPT, timeout_s=t)["text"], inserter=ins,
+    orch = Orchestrator(RustAudio(), {"success_hold": 50}, transcriber=lambda wav, t: srv.transcribe_auto(
+        wav, prompt=VOCAB_PROMPT, timeout_s=t)["text"], inserter=ins,
         options=lambda: {"strategy": "auto"})
     stamps = {}
     orch.state_changed.connect(lambda s: stamps.setdefault(s, time.perf_counter()))

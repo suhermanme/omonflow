@@ -29,6 +29,7 @@ DEFAULT_DELAYS_MS = {
     "focus_restore": 150,  # INSERTING before insertion "starts"
     "insert": 200,
     "success_hold": 1500,
+    "success_copy_hold": 4000,  # unverified insertion: time to click "copy"
 }
 POLL_MS = 33
 
@@ -72,6 +73,7 @@ class Orchestrator(QObject):
         self.sm = StateMachine()
         self.error_text = ""
         self.error_label: str | None = None  # short widget label for the error, e.g. "Copied — ⌘V"
+        self.widget_label: str | None = None  # label shown in SUCCESS, e.g. "Done · click to copy"
         self.transcript: str | None = None  # kept on errors for Copy
         self.retry_action: str | None = None  # "start" after a mic failure
         self.insertion_started = False
@@ -179,6 +181,8 @@ class Orchestrator(QObject):
             self.start()
         elif s in (State.CAPTURE_READY, State.RECORDING):
             self.stop()
+        elif s == State.SUCCESS and self.transcript:
+            self.copy_transcript()
         elif s == State.ERROR:
             if self.transcript:
                 self.copy_transcript()
@@ -423,12 +427,21 @@ class Orchestrator(QObject):
             except Exception:  # noqa: BLE001
                 pass
         if outcome == "inserted":
-            if res is not None and res.verified is False:
-                self.notice.emit("warning", "Inserted, but the app did not show the text. Check it, or copy it "
-                                            "from History.")
-            self.transcript = None
+            verified = None if res is None else res.verified
+            if verified is False:
+                self.notice.emit("warning", "Inserted, but the app did not show the text. Click the widget to copy "
+                                            "it, or find it in History.")
+            if verified is True or res is None:
+                self.transcript = None
+                self.widget_label = None
+                hold = "success_hold"
+            else:
+                # The app can't confirm the text arrived (e.g. Chrome with no text box
+                # selected silently drops a paste). Keep it a moment so one click copies it.
+                self.widget_label = "Done · click to copy"
+                hold = "success_copy_hold"
             self._fire("inserted")
-            self._later("success_hold", lambda: self._fire("done"))
+            self._later(hold, self._success_done)
             return
         if isinstance(res, Exception):
             msg = f"Insertion failed: {res}"
@@ -439,6 +452,12 @@ class Orchestrator(QObject):
             self._fail(msg, retry=False, label="Copied — ⌘V")
             return
         self._fail(msg + " Click to copy the text.", retry=False, label="Not inserted")  # transcript kept
+
+    def _success_done(self) -> None:
+        self.transcript = None
+        self.widget_label = None
+        if self.state == State.SUCCESS:
+            self._fire("done")
 
     # ------------------------------------------------------------ helpers
     def _record_startup(self, info: dict | None, error: str | None) -> None:

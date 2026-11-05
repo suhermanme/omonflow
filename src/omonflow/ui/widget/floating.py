@@ -149,7 +149,7 @@ class FloatingWidget(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(self.rect())
         try:
-            label = self.label if self.state == State.ERROR else None
+            label = self.label if self.state in (State.ERROR, State.SUCCESS) else None
             self.visualizer.paint(p, rect, Frame(self.state, self.phase, self.level, label))
         except Exception as exc:  # noqa: BLE001
             p.end()
@@ -175,7 +175,7 @@ class FloatingWidget(QWidget):
         if s in LIVE_STATES:
             return "stop"
         if s == State.SUCCESS:
-            return "done"
+            return "copy" if self.has_transcript else "done"
         if s == State.ERROR:
             return "copy" if self.has_transcript else ("retry" if self.audio_kept else "dismiss")
         return "busy"

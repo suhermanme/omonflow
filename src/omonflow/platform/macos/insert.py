@@ -28,6 +28,10 @@ from omonflow.insertion.base import InsertResult, Target
 LOG = logging.getLogger("omonflow.insert")
 ACCESSIBILITY_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 KEY_V, KEY_RETURN = 9, 36
+# Focused elements that can never receive text. Only used when the app exposes
+# its focused element; unknown roles are always attempted (never block blindly).
+NOT_EDITABLE_ROLES = {"AXWebArea", "AXStaticText", "AXWindow", "AXButton", "AXLink", "AXImage", "AXApplication",
+                      "AXScrollArea", "AXHeading", "AXMenuBar", "AXToolbar"}
 TYPE_CHUNK = 20            # UTF-16 units per keyboard event
 PASTE_SETTLE_S = 0.25      # time for the target app to read the pasteboard
 FOCUS_TIMEOUT_S = 1.0
@@ -104,6 +108,7 @@ class MacInserter:
         self._ws = NSWorkspace.sharedWorkspace()
         self.tracker = FocusTracker()
         self._carbon = None
+        self._ax_enabled: set[int] = set()
 
     # ------------------------------------------------------------ permission / state
     def trusted(self) -> bool:
@@ -150,6 +155,17 @@ class MacInserter:
                 t.secure = self._is_secure(el)
         return t
 
+    def _editable(self, el) -> bool:
+        role = self._attr(el, "AXRole")
+        if role not in NOT_EDITABLE_ROLES:
+            return True
+        AS = _ax()
+        for attr in ("AXValue", "AXSelectedText"):
+            err, settable = AS.AXUIElementIsAttributeSettable(el, attr, None)
+            if err == 0 and settable:
+                return True
+        return False
+
     def _is_secure(self, el) -> bool:
         """Password field? Native fields use the AXSecureTextField subrole; some
         toolkits (e.g. Qt) only set the role description."""
@@ -162,7 +178,21 @@ class MacInserter:
         AS = _ax()
         app = AS.AXUIElementCreateApplication(pid)
         err, el = AS.AXUIElementCopyAttributeValue(app, "AXFocusedUIElement", None)
-        return el if err == 0 else None
+        if err == 0 and el is not None:
+            return el
+        if pid in self._ax_enabled:
+            return None
+        # Chromium and Electron apps expose their focused element (and its text)
+        # only after an assistive client asks; this switches it on asynchronously.
+        self._ax_enabled.add(pid)
+        AS.AXUIElementSetAttributeValue(app, "AXManualAccessibility", True)
+        deadline = time.monotonic() + 0.5
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+            err, el = AS.AXUIElementCopyAttributeValue(app, "AXFocusedUIElement", None)
+            if err == 0 and el is not None:
+                return el
+        return None
 
     @staticmethod
     def _attr(el, name):
@@ -218,6 +248,13 @@ class MacInserter:
         element = self._focused_element(target.pid) or target.element
         if element is not None and self._is_secure(element):  # focus may have moved since the start
             return InsertResult("not_started", error="The focused field is a password field; OmonFlow never types there.")
+        if element is not None and not self._editable(element):
+            # e.g. reading a web page in Chrome with no text box selected: a paste
+            # would silently go nowhere. Keep the text on the clipboard instead.
+            self._clipboard_set(text, transient=False)
+            return InsertResult("copied", "clipboard", None,
+                                f"No text field is selected in {target.name or 'the app'}. The text was copied — "
+                                "click into a text field and press ⌘V.")
         multiline = "\n" in text
 
         cancelled_result = InsertResult("not_started", error="cancelled before insertion started")

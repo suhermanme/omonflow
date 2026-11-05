@@ -227,7 +227,8 @@ class WhisperController(QObject):
         self.status_changed.emit(self.snapshot())
 
     # ------------------------------------------------------------ transcription
-    def transcribe(self, wav: bytes, timeout_s: float, language: str = "auto", prompt: str | None = None) -> str:
+    def transcribe(self, wav: bytes, timeout_s: float, language: str = "auto", prompt: str | None = None,
+                   allowed: tuple[str, ...] = ("en", "id"), prefer: str | None = None) -> str:
         """Blocking (worker thread). Reloads an engine unloaded while idle, then waits for it."""
         if (self.server is None or self.server.status.state == "stopped") and self.config["model"]:
             self.ensure_running(self.config["model"])
@@ -244,10 +245,14 @@ class WhisperController(QObject):
             reason = snap.get("error") or f"engine is {state}"
             raise WhisperError(f"speech recognition is not ready ({reason}). See Settings → Speech Recognition")
         audio_s = max(0.0, (len(wav) - 44) / 32000)  # 16 kHz mono s16 WAV
-        r = srv.transcribe(wav, language=language, prompt=prompt, timeout_s=timeout_s)
+        if language == "auto":  # chosen among the user's languages; never translated
+            r = srv.transcribe_auto(wav, allowed=allowed, prefer=prefer, prompt=prompt, timeout_s=timeout_s)
+        else:
+            r = srv.transcribe(wav, language=language, prompt=prompt, timeout_s=timeout_s)
         self.last_transcription = {"ms": r["elapsed_ms"], "audio_s": round(audio_s, 2),
                                    "rtf": round(r["elapsed_ms"] / 1000 / audio_s, 3) if audio_s else None,
                                    "model": Path(srv.status.model or "").name, "backend": srv.status.backend,
+                                   "language": r.get("chosen") or language, "passes": r.get("passes", 1),
                                    "at": time.strftime("%H:%M:%S")}
         self._arm_idle_timer()
         self.status_changed.emit(self.snapshot())
