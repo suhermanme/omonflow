@@ -19,8 +19,9 @@ Implements [SPEC.md](SPEC.md) §21.
 |---|---|
 | M01 Repository assessment and architecture | Complete (owner continued to M02 on 2026-11-05) |
 | M02 Application foundation | Complete on macOS ([report](M02-report.md)); owner continued to M03 |
-| M03 On-demand audio core | **Implemented and tested on macOS; comparison gate decision requested** ([report](M03-report.md)) |
-| M04–M09 | Not started; M04 awaits approval |
+| M03 On-demand audio core | Complete on macOS ([report](M03-report.md)); gate decided: Rust primary |
+| M04 Whisper process manager and models | **Implemented and tested on macOS; owner review requested** ([report](M04-report.md)) |
+| M05–M09 | Not started; M05 awaits approval |
 
 ## Dependencies
 
@@ -151,6 +152,8 @@ tools/validation runs (owner, any time) ─────────────�
 - Models are stored in the user data dir.
 - Cold start and model-load times reported on the M4 Pro.
 
+**M04 inputs to M05:** wire `WhisperServer.transcribe` into the orchestrator (replace the stub); "No speech recognized" path; transcription timeout; complete a real model download on a normal connection.
+
 ## M05 — Dictation MVP (macOS)
 
 **Scope:**
@@ -225,4 +228,6 @@ tools/validation runs (owner, any time) ─────────────�
 | 2026-11-05 | Idle widget is static (no animation) to meet the < 1 % idle CPU target | M02 measurement |
 | 2026-11-05 | ⌘⌥ opt-in shortcut deferred to M05 | M02 scope |
 | 2026-11-05 | Proceed to M03 | Owner ("continue") |
-| 2026-11-05 | Recommendation: Rust stays the primary audio core; Python fallback kept as labelled degraded mode | M03 measurements; **awaiting owner decision** |
+| 2026-11-05 | Rust stays the primary audio core; Python fallback kept as labelled degraded mode | Owner ("yes agree") |
+| 2026-11-05 | Proceed to M04 | Owner |
+| 2026-11-05 | Engine starts at launch with the chosen model (default `small`) and stays loaded | M04 (memory vs latency; revisit in M06) |

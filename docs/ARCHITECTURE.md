@@ -195,6 +195,13 @@ macOS default: **⌘⇧Space** (registered). ⌘⌥ tap is opt-in under Settings
 - **whisper-side VAD off.** A short or near-silent clip is rejected before transcription (an energy check, not a boundary decision).
 - Backend truth comes from whisper/ggml's own initialization log and a benchmark (`tools/validation/whisper_bench.py` uses the same rule).
 
+**M04 implementation notes:**
+- Executable discovery order: `OMONFLOW_WHISPER_SERVER` → bundled → PATH → `/opt/homebrew/bin`, `/usr/local/bin`.
+- The server log is `whisper-server.log` in the log folder. The backend is taken from `whisper_backend_init_gpu: using … backend` / `no GPU found`.
+- Pidfile `whisper-server.pid.json` in the data folder; a stale process is stopped only if its command line still matches our executable and port.
+- Restart policy: 3 restarts per 5 minutes, exponential backoff.
+- Models live in `<user data>/models` with `.catalog.json` (metadata cache) and `.verified.json`.
+
 ## 7. Storage, privacy and config
 
 - **Locations:** `platformdirs` user data/config dirs.

@@ -17,6 +17,8 @@ Third-party components distributed with OmonFlow builds:
   sounddevice                         MIT
   PortAudio                           MIT-style
   NumPy                               BSD-3-Clause
+  whisper.cpp / ggml (run as a separate process; bundled from M09)  MIT
+  Whisper model weights (downloaded by the user, not bundled)        MIT (OpenAI)
   PyO3 (Rust crate)                   MIT/Apache-2.0
   platformdirs                        MIT
   PyObjC (macOS builds)               MIT

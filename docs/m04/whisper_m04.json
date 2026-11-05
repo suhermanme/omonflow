@@ -1,0 +1,54 @@
+{
+  "machine": "macOS-27.2-arm64-arm-64bit-Mach-O",
+  "executable": "/opt/homebrew/bin/whisper-server",
+  "version": "1.9.5",
+  "date": "2026-11-05 20:08",
+  "import": {
+    "small": {
+      "state": "verified",
+      "ms": 6265.5,
+      "hardlink": true
+    },
+    "large-v3-turbo-q5_0": {
+      "state": "verified",
+      "ms": 197.5,
+      "hardlink": true
+    }
+  },
+  "runs": {
+    "small": {
+      "start_to_ready_ms": [
+        212.5,
+        222.5,
+        221.7
+      ],
+      "transcribe_ms_median": 201.6,
+      "rtf": 0.018,
+      "backend": "Metal",
+      "text": "And so my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
+    },
+    "large-v3-turbo-q5_0": {
+      "start_to_ready_ms": [
+        334.4,
+        330.8,
+        333.3
+      ],
+      "transcribe_ms_median": 641.1,
+      "rtf": 0.058,
+      "backend": "Metal",
+      "text": "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country."
+    }
+  },
+  "sample_seconds": 11.0,
+  "model_switch_ms": [
+    166.6,
+    142.2
+  ],
+  "rollback": {
+    "error": "ggml-small.en.bin could not be loaded (the engine crashed); restored ggml-small.bin",
+    "previous_model_still_works": true
+  },
+  "kill_to_ready_ms": 2611,
+  "after_restart_transcribes": true,
+  "foreign_server_untouched": true
+}

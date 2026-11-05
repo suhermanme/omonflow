@@ -21,7 +21,7 @@ def make_app(qapp, config_dir):
 
     def make():
         a = OmonFlowApp(qapp, SettingsStore(), None, shortcut_backend=lambda: FakeBackend(),
-                        audio=StubAudioBackend(), delays=FAST)
+                        audio=StubAudioBackend(), delays=FAST, start_engine=False)
         apps.append(a)
         return a
     yield make
@@ -75,7 +75,7 @@ def test_failed_visualizer_keeps_saved_preference(make_app, config_dir):
 def test_shortcut_failure_keeps_users_choice(qapp, config_dir):
     from omonflow.shortcuts.service import ShortcutStatus
     a = OmonFlowApp(qapp, SettingsStore(), None,
-                    shortcut_backend=lambda: FakeBackend(fail=ShortcutStatus.CONFLICT), delays=FAST)
+                    shortcut_backend=lambda: FakeBackend(fail=ShortcutStatus.CONFLICT), delays=FAST, start_engine=False)
     a._apply_shortcut("cmd+alt+k", True)
     assert a.shortcut.status == ShortcutStatus.CONFLICT
     assert SettingsStore().load().shortcut == "cmd+alt+k"

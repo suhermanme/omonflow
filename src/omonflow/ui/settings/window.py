@@ -6,14 +6,16 @@ Closing the window only hides it; OmonFlow keeps running.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QKeySequenceEdit, QLabel,
-    QProgressBar, QPushButton, QRadioButton, QSpinBox, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
+    QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
+    QHeaderView, QKeySequenceEdit, QLabel, QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox,
+    QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 import omonflow
@@ -53,8 +55,9 @@ class SettingsWindow(QWidget):
     device_selected = Signal(object, object)  # (device id or None, name or None)
     timeout_changed = Signal(int)
     mic_test_requested = Signal()
+    model_selected = Signal(str)
 
-    def __init__(self, settings, diagnostics: dict, audio_info=None) -> None:
+    def __init__(self, settings, diagnostics: dict, audio_info=None, whisper=None) -> None:
         super().__init__(None, Qt.Window)
         self.settings = settings
         self.setWindowTitle("OmonFlow Settings")
@@ -64,6 +67,8 @@ class SettingsWindow(QWidget):
         self.tabs.addTab(self._appearance(), "Appearance")
         self.audio_info = audio_info
         self.tabs.addTab(self._audio(), "Audio Input")
+        self.whisper = whisper
+        self.tabs.addTab(self._speech(), "Speech Recognition")
         self.about = QTextBrowser()
         self.about.setOpenExternalLinks(True)
         self.tabs.addTab(self.about, "About && Diagnostics")
@@ -72,7 +77,7 @@ class SettingsWindow(QWidget):
         self.set_diagnostics(diagnostics)
 
     def show_tab(self, name: str) -> None:
-        self.tabs.setCurrentIndex({"general": 0, "appearance": 1, "audio": 2, "about": 3}.get(name, 0))
+        self.tabs.setCurrentIndex({"general": 0, "appearance": 1, "audio": 2, "speech": 3, "about": 4}.get(name, 0))
         if name == "audio":
             self.refresh_audio()
         self.show()
@@ -361,6 +366,187 @@ class SettingsWindow(QWidget):
         lines.append(f"Median {summary['median_ready_ms']} ms, slowest {summary['max_ready_ms']} ms, "
                      f"{summary['failures']} failure(s) in {summary['runs']} start(s).")
         self.startup_label.setText("<br>".join(lines))
+
+    # ------------------------------------------------------------ Speech Recognition
+    def _speech(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        eng = QGroupBox("Engine (whisper.cpp)")
+        g = QGridLayout(eng)
+        self.engine_label = QLabel("Starting…")
+        self.engine_label.setWordWrap(True)
+        self.engine_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        restart = QPushButton("Restart engine")
+        restart.clicked.connect(lambda: self.whisper and self.whisper.restart(self.settings.whisper_model))
+        g.addWidget(self.engine_label, 0, 0)
+        g.addWidget(restart, 0, 1, Qt.AlignTop)
+        lay.addWidget(eng)
+
+        box = QGroupBox("Models")
+        v = QVBoxLayout(box)
+        self.model_table = QTableWidget(0, 5)
+        self.model_table.setHorizontalHeaderLabels(["Model", "Download", "Memory (approx.)", "Status", ""])
+        self.model_table.verticalHeader().setVisible(False)
+        self.model_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.model_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        hh = self.model_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in (1, 2, 3, 4):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        v.addWidget(self.model_table)
+        row = QHBoxLayout()
+        imp = QPushButton("Import a model file…")
+        imp.clicked.connect(self._import_model)
+        refresh = QPushButton("Refresh sizes and checksums")
+        refresh.clicked.connect(lambda: self.whisper and self.whisper.refresh_catalog())
+        row.addWidget(imp)
+        row.addWidget(refresh)
+        row.addStretch(1)
+        v.addLayout(row)
+        note = QLabel("Models are stored in your user data folder and checked against the checksums published "
+                      "with whisper.cpp. Nothing is downloaded without your confirmation.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray")
+        v.addWidget(note)
+        lay.addWidget(box, 1)
+        self._progress_text: dict[str, str] = {}
+        if self.whisper:
+            self.whisper.status_changed.connect(self.show_engine_status)
+            self.whisper.models_changed.connect(self.refresh_models)
+            self.whisper.progress.connect(self._model_progress)
+            self.whisper.task_done.connect(self._model_task_done)
+            self.show_engine_status(self.whisper.snapshot())
+            self.refresh_models()
+        return page
+
+    def show_engine_status(self, st: dict) -> None:
+        state = st.get("state", "stopped")
+        colors = {"ready": "#2e9d5b", "failed": "#c0392b", "unavailable": "#c0392b", "no_model": "#c0392b"}
+        names = {"ready": "ready", "loading": "loading model…", "starting": "starting…", "restarting": "restarting…",
+                 "stopped": "stopped", "failed": "failed", "unavailable": "not available", "no_model": "no model"}
+        lines = [f"<b>Status:</b> <span style='color:{colors.get(state, '#888')}'>{names.get(state, state)}</span>"]
+        if st.get("model"):
+            lines.append(f"<b>Model:</b> {Path(st['model']).name}")
+        if st.get("backend"):
+            lines.append(f"<b>Backend in use:</b> {st['backend']} (reported by whisper.cpp)")
+        if st.get("start_ms"):
+            extra = f", last model switch {st['load_ms']:.0f} ms" if st.get("load_ms") else ""
+            lines.append(f"<b>Start-up:</b> {st['start_ms']:.0f} ms{extra}")
+        if st.get("executable"):
+            ver = f" {st['version']}" if st.get("version") else ""
+            lines.append(f"<b>Executable:</b> {st['executable']}{ver} ({st['source']})")
+        if st.get("pid"):
+            lines.append(f"<b>Process:</b> pid {st['pid']}, port {st['port']}, restarts {st.get('restarts', 0)}")
+        if st.get("error"):
+            lines.append(f"<span style='color:#c0392b'>{st['error']}</span>")
+        self.engine_label.setText("<br>".join(lines))
+
+    def refresh_models(self) -> None:
+        if not self.whisper:
+            return
+        statuses = self.whisper.store.all_status()
+        self.model_table.setRowCount(len(statuses))
+        for r, st in enumerate(statuses):
+            active = st.spec.id == self.settings.whisper_model
+            name = st.spec.label + (" — in use" if active else "")
+            if st.spec.note:
+                name += f"\n{st.spec.note}"
+            size = st.size or st.installed_size
+            size_txt = f"{size / 1e6:,.0f} MB" if size else f"~{st.spec.approx_mb:,} MB"
+            state_txt = {"not_installed": "not installed", "partial": f"partial ({st.partial_bytes / 1e6:,.0f} MB)",
+                         "installed": "installed", "verified": "installed ✓ verified",
+                         "corrupt": f"damaged: {st.detail}"}[st.state]
+            state_txt = self._progress_text.get(st.spec.id, state_txt)
+            for c, text in enumerate([name, size_txt, f"~{st.memory_mb:,} MB", state_txt]):
+                item = QTableWidgetItem(text)
+                if active:
+                    f = item.font()
+                    f.setBold(True)
+                    item.setFont(f)
+                self.model_table.setItem(r, c, item)
+            stale = self.model_table.cellWidget(r, 4)
+            if stale is not None:  # hide now; Qt deletes replaced cell widgets only later
+                stale.hide()
+            self.model_table.setCellWidget(r, 4, self._model_actions(st, active))
+        self.model_table.resizeRowsToContents()
+        for r in range(self.model_table.rowCount()):  # room for the buttons
+            self.model_table.setRowHeight(r, max(self.model_table.rowHeight(r), 34))
+
+    def _model_actions(self, st, active: bool) -> QWidget:
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(2, 0, 2, 0)
+        mid = st.spec.id
+
+        def btn(text, slot):
+            b = QPushButton(text)
+            b.clicked.connect(slot)
+            h.addWidget(b)
+
+        if self.whisper.busy(mid):
+            btn("Cancel", lambda: self.whisper.cancel(mid))
+        elif not st.installed:
+            btn("Resume download" if st.state == "partial" else "Download…", lambda: self._confirm_download(st))
+        else:
+            if not active and st.state != "corrupt":
+                btn("Use", lambda: self._use_model(mid))
+            if st.state == "installed" and st.sha256:
+                btn("Verify", lambda: self.whisper.verify(mid))
+            if st.state == "corrupt":
+                btn("Download again…", lambda: self._redownload(st))
+            if active:
+                h.addWidget(QLabel("in use"))
+            else:
+                btn("Remove", lambda: self._remove_model(mid))
+        return w
+
+    def _confirm_download(self, st) -> None:
+        size = st.size or st.spec.approx_mb * 1e6
+        exact = "" if st.size else " (approximate; exact size unknown while offline)"
+        ok = QMessageBox.question(
+            self, "Download model",
+            f"Download {st.spec.label}?\n\nDownload size: {size / 1e6:,.0f} MB{exact}\n"
+            f"Memory while in use: about {st.memory_mb:,} MB\n\nSource: huggingface.co/ggerganov/whisper.cpp",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel)
+        if ok == QMessageBox.Yes:
+            self.whisper.download(st.spec.id)
+
+    def _redownload(self, st) -> None:
+        self.whisper.store.remove(st.spec.id)
+        self._confirm_download(st)
+
+    def _use_model(self, model_id: str) -> None:
+        self.model_selected.emit(model_id)
+        self.refresh_models()
+
+    def _remove_model(self, model_id: str) -> None:
+        if QMessageBox.question(self, "Remove model", f"Delete the {model_id} model file?",
+                                QMessageBox.Yes | QMessageBox.Cancel) != QMessageBox.Yes:
+            return
+        err = self.whisper.remove(model_id, self.settings.whisper_model)
+        if err:
+            QMessageBox.information(self, "Remove model", err)
+
+    def _import_model(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Import a whisper.cpp model", str(Path.home()),
+                                              "whisper.cpp models (ggml-*.bin)")
+        if path:
+            self.whisper.import_file(Path(path))
+
+    def _model_progress(self, model_id: str, task: str, fraction: float, rate: float) -> None:
+        verb = {"download": "Downloading", "verify": "Checking", "import": "Importing"}[task]
+        pct = f" {fraction * 100:.0f} %" if fraction >= 0 else ""
+        speed = f" ({rate / 1e6:.1f} MB/s)" if rate > 0 else ""
+        text = f"{verb}{pct}{speed}"
+        if self._progress_text.get(model_id, "")[:len(verb) + 4] != text[:len(verb) + 4]:
+            self._progress_text[model_id] = text
+            self.refresh_models()
+
+    def _model_task_done(self, model_id: str, task: str, ok: bool, message: str) -> None:
+        self._progress_text.pop(model_id, None)
+        if task != "engine" and not ok:
+            QMessageBox.warning(self, "Model", message)
+        self.refresh_models()
 
     # ------------------------------------------------------------ About
     def set_diagnostics(self, d: dict) -> None:

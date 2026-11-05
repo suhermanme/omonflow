@@ -26,7 +26,8 @@ def app(qapp, config_dir):
 
     assert not any_input_running(), "another app is using a microphone; close it first"
     a = OmonFlowApp(qapp, SettingsStore(), None, shortcut_backend=lambda: FakeBackend(),
-                    delays={"transcribe": 5, "focus_restore": 5, "insert": 5, "success_hold": 5})
+                    delays={"transcribe": 5, "focus_restore": 5, "insert": 5, "success_hold": 5},
+                    start_engine=False)
     yield a
     a.dispose()
     qapp.processEvents()

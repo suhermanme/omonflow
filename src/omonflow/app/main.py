@@ -18,7 +18,7 @@ from omonflow.app.single_instance import InstanceServer, send_to_running
 from omonflow.audio.factory import create_backend
 from omonflow.core.states import ACTIVE_STATES, State
 from omonflow.shortcuts.service import ShortcutService
-from omonflow.storage.settings import SettingsStore, config_dir, log_dir
+from omonflow.storage.settings import SettingsStore, config_dir, data_dir, log_dir
 from omonflow.ui import visualizers
 from omonflow.ui.settings.window import SettingsWindow
 from omonflow.ui.tray.tray import TrayController
@@ -41,7 +41,8 @@ def setup_logging(level: str) -> None:
 
 class OmonFlowApp:
     def __init__(self, app: QApplication, store: SettingsStore, server: InstanceServer | None,
-                 shortcut_backend=None, audio=None, delays: dict | None = None) -> None:
+                 shortcut_backend=None, audio=None, delays: dict | None = None, whisper=None,
+                 start_engine: bool = True) -> None:
         self.app = app
         self.store = store
         self.settings = store.load()
@@ -68,7 +69,13 @@ class OmonFlowApp:
                                      always_on_top=self.settings.always_on_top)
         self.tray = TrayController()
         self.shortcut = ShortcutService(shortcut_backend) if shortcut_backend else ShortcutService()
-        self.settings_win = SettingsWindow(self.settings, self.diagnostics(), audio_info=self.audio_info)
+        if whisper is None:
+            from omonflow.app.whisper_controller import WhisperController
+            from omonflow.stt.models import ModelStore
+            whisper = WhisperController(ModelStore(data_dir() / "models"), data_dir(), log_dir())
+        self.whisper = whisper
+        self.settings_win = SettingsWindow(self.settings, self.diagnostics(), audio_info=self.audio_info,
+                                           whisper=self.whisper)
 
         # --- wiring: UI sends intents, orchestrator owns state
         self.widget.intent.connect(self._widget_intent)
@@ -94,6 +101,8 @@ class OmonFlowApp:
         self.settings_win.device_selected.connect(self._device_selected)
         self.settings_win.timeout_changed.connect(self._timeout_changed)
         self.settings_win.mic_test_requested.connect(self._mic_test)
+        self.settings_win.model_selected.connect(self._model_selected)
+        self.whisper.task_done.connect(self._whisper_task_done)
         self.orch.mic_test_progress.connect(self.settings_win.show_test_level)
         self.orch.mic_test_done.connect(self._mic_test_done)
         self.orch.startup_recorded.connect(lambda _e: self.settings_win.show_startup_stats(
@@ -113,6 +122,9 @@ class OmonFlowApp:
         LOG.info("diagnostics: %s", self.diagnostics())
         if self.audio_fallback_reason:
             self._notice("warning", f"Audio: {self.audio_fallback_reason}")
+        if start_engine:
+            self.whisper.refresh_catalog()
+            self.whisper.ensure_running(self.settings.whisper_model)
         if store.recovered_from:
             self._notice("warning", f"Settings were unreadable and have been reset. Backup: {store.recovered_from}")
 
@@ -234,6 +246,18 @@ class OmonFlowApp:
     def _mic_test_done(self, result: dict) -> None:
         self.settings_win.show_test_result(result)
 
+    # ------------------------------------------------------------ speech recognition
+    def _model_selected(self, model_id: str) -> None:
+        self.settings.whisper_model = model_id
+        self._save()
+        self.whisper.ensure_running(model_id)
+
+    def _whisper_task_done(self, model_id: str, task: str, ok: bool, message: str) -> None:
+        if not ok and task in ("engine", "download", "import"):
+            self._notice("error", f"Speech recognition: {message}")
+        if ok and task in ("download", "import") and model_id == self.settings.whisper_model:
+            self.whisper.ensure_running(model_id)  # the chosen model just became available
+
     def _shortcut_status(self, status: str, message: str) -> None:
         self.settings_win.show_shortcut_status(status, message)
 
@@ -325,6 +349,7 @@ class OmonFlowApp:
 
     def dispose(self) -> None:
         """Release everything in a safe order (also used by tests)."""
+        self.whisper.shutdown()  # stops only the OmonFlow-owned whisper-server
         self.shortcut.shutdown()
         self.orch.shutdown()
         self.widget.timer.stop()

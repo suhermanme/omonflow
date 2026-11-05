@@ -34,6 +34,11 @@ def config_dir() -> Path:
     return Path(override) if override else Path(platformdirs.user_config_dir(APP_NAME, ORG_NAME))
 
 
+def data_dir() -> Path:
+    override = os.environ.get("OMONFLOW_CONFIG_DIR")
+    return Path(override) / "data" if override else Path(platformdirs.user_data_dir(APP_NAME, ORG_NAME))
+
+
 def log_dir() -> Path:
     override = os.environ.get("OMONFLOW_CONFIG_DIR")
     return Path(override) / "logs" if override else Path(platformdirs.user_log_dir(APP_NAME, ORG_NAME))
@@ -52,6 +57,7 @@ class Settings:
     audio_device_id: str | None = None    # Rust core device id (None = system default)
     audio_device_name: str | None = None  # also used by the Python fallback
     mic_timeout_ms: int = 3000
+    whisper_model: str = "small"
 
     @classmethod
     def from_dict(cls, data: dict) -> "Settings":
