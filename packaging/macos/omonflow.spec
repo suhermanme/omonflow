@@ -11,7 +11,9 @@ import omonflow  # noqa: E402
 a = Analysis(
     [str(ROOT / "packaging" / "launcher.py")],
     pathex=[str(ROOT / "src")],
-    datas=[(str(ROOT / "src" / "omonflow" / "resources"), "omonflow/resources")],
+    datas=[(str(ROOT / "src" / "omonflow" / "resources"), "omonflow/resources"),
+           # App icon with light/dark/tinted/clear appearances (compiled by packaging/macos/build_icon.sh)
+           (str(ROOT / "packaging" / "macos" / "icon" / "Assets.car"), ".")],
     hiddenimports=["omonflow._core", "AppKit", "Foundation", "objc", "AVFoundation", "sounddevice",
                    "_sounddevice_data", "numpy", "ApplicationServices", "Quartz", "sqlite3",
                    # M07: refinement (imported lazily) and the macOS Keychain backend for API keys
@@ -27,11 +29,13 @@ coll = COLLECT(exe, a.binaries, a.datas, name="OmonFlow")
 app = BUNDLE(
     coll,
     name="OmonFlow.app",
+    icon=str(ROOT / "packaging" / "macos" / "icon" / "AppIcon.icns"),
     bundle_identifier=omonflow.APP_ID,
     version=omonflow.__version__.split(".dev")[0],
     info_plist={
         "CFBundleName": "OmonFlow",
         "CFBundleDisplayName": "OmonFlow",
+        "CFBundleIconName": "AppIcon",  # Assets.car: appearance-aware icon on macOS 26+
         "LSUIElement": True,  # menu-bar app: no Dock icon, no activation on show
         "LSMinimumSystemVersion": "13.0",  # PySide6 6.11 wheels require macOS 13+
         "NSMicrophoneUsageDescription": "OmonFlow records your voice only while you dictate, after you click the microphone.",

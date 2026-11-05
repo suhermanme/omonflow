@@ -1,5 +1,7 @@
 # OmonFlow
 
+<p><img src="docs/icon/light.png" width="96" alt="OmonFlow icon, light"> <img src="docs/icon/dark.png" width="96" alt="OmonFlow icon, dark"></p>
+
 **Speak naturally. Type everywhere.**
 
 Local-first, cross-platform desktop dictation. A global shortcut shows the floating Spectrum Pill; click the microphone, speak, click Stop, and the text is transcribed locally by whisper.cpp and inserted into the app you were using.

@@ -239,6 +239,7 @@ macOS default: **⌘⇧Space** (registered). ⌘⌥ tap is opt-in under Settings
 
 ## 8. Packaging and signing
 
+- **App icon (macOS):** `packaging/macos/AppIcon.icon` is an Icon Composer document (Spectrum Pill on a blue→violet field; dark: near-black field, dark glass pill) with light, dark, tinted and clear appearances. `packaging/macos/build_icon.sh` compiles it with `actool` (Xcode 26+) into `icon/Assets.car` (`CFBundleIconName`, appearance-aware on macOS 26+) and `icon/AppIcon.icns` (older macOS); the compiled files are committed so builds don't need Xcode.
 - **Bundling:** PyInstaller onedir. macOS `.app` → DMG (`dmgbuild`); Windows → Inno Setup installer; Linux → AppImage.
 - **whisper-server:** shipped as a resource. Evaluate ggml dynamic backends (CPU variants + CUDA/Vulkan as loadable libraries) in M04.
 - **macOS development:**
