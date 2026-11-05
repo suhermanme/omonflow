@@ -28,6 +28,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -452,6 +453,53 @@ class WhisperServer:
         LOG.info("language: whisper=%s chosen=%s logprob=%s passes=%d", used, chosen, scores, passes)  # never text
         return {"text": candidates[chosen][1], "elapsed_ms": round(total_ms, 1), "language": used, "chosen": chosen,
                 "logprobs": scores, "passes": passes}
+
+    def transcribe_mixed(self, wav: bytes, allowed: tuple[str, ...] = ("en", "id"), prefer: str | None = None,
+                         prompt: str | None = VOCAB_PROMPT, timeout_s: float = 120) -> dict:
+        """Dictations may switch language between sentences: split at pauses and
+        give every part its own language (never translated, never dropped)."""
+        from .segment import pcm_to_wav, split_on_pauses, wav_to_pcm
+
+        if len(allowed) < 2:
+            return self.transcribe_auto(wav, allowed, prefer, prompt, timeout_s)
+        try:
+            pcm = wav_to_pcm(wav)
+        except (ValueError, EOFError, wave.Error):  # not our 16 kHz WAV: transcribe as a whole
+            return self.transcribe_auto(wav, allowed, prefer, prompt, timeout_s)
+        parts = split_on_pauses(pcm)
+        texts, chosen, total_ms, passes = [], [], 0.0, 0
+        for start, end in parts:
+            r = self._best_language(pcm_to_wav(pcm[start:end]), allowed, prefer, prompt, timeout_s)
+            if r["text"]:
+                texts.append(r["text"])
+            chosen.append(f"{r['chosen']}{r['logprobs']}")
+            total_ms += r["elapsed_ms"]
+            passes += r["passes"]
+        LOG.info("language per part (%d parts, %d passes): %s", len(parts), passes, "; ".join(chosen))  # no text
+        langs = [c[:2] for c in chosen]
+        return {"text": " ".join(texts), "elapsed_ms": round(total_ms, 1), "parts": len(parts), "passes": passes,
+                "chosen": max(set(langs), key=langs.count) if langs else None, "languages": langs}
+
+    def _best_language(self, wav: bytes, allowed, prefer, prompt, timeout_s) -> dict:
+        """Transcribe one part in each allowed language; keep the most confident
+        (the preferred language wins unless another is clearly better)."""
+        results, ms_total = {}, 0.0
+        for lang in allowed:
+            fields = {"language": lang, "response_format": "verbose_json", "temperature": "0.0",
+                      "temperature_inc": "0.0", "no_language_probabilities": "true"}
+            if prompt:
+                fields.update(prompt=prompt, carry_initial_prompt="true")
+            data, ms = self._post_inference(wav, fields, timeout_s)
+            segs = data.get("segments") or []
+            n = sum(len(x.get("tokens") or []) for x in segs)
+            lp = sum((x.get("avg_logprob") or 0.0) * len(x.get("tokens") or []) for x in segs) / n if n else -9.0
+            results[lang] = (lp, (data.get("text") or "").strip())
+            ms_total += ms
+        chosen = max(results, key=lambda k: results[k][0])
+        if prefer in results and prefer != chosen and results[chosen][0] - results[prefer][0] < PREFER_WINDOW:
+            chosen = prefer
+        return {"text": results[chosen][1], "chosen": chosen, "elapsed_ms": ms_total, "passes": len(results),
+                "logprobs": {k: round(v[0], 3) for k, v in results.items()}}
 
     def _post_inference(self, wav: bytes, fields: dict, timeout_s: float) -> tuple[dict, float]:
         body, ctype = _multipart(fields, {"file": ("audio.wav", wav, "audio/wav")})

@@ -245,7 +245,10 @@ class WhisperController(QObject):
             reason = snap.get("error") or f"engine is {state}"
             raise WhisperError(f"speech recognition is not ready ({reason}). See Settings → Speech Recognition")
         audio_s = max(0.0, (len(wav) - 44) / 32000)  # 16 kHz mono s16 WAV
-        if language == "auto":  # chosen among the user's languages; never translated
+        if language == "auto" and len(allowed) >= 2:
+            # Per sentence: a dictation may switch between English and Indonesian.
+            r = srv.transcribe_mixed(wav, allowed=allowed, prefer=prefer, prompt=prompt, timeout_s=timeout_s)
+        elif language == "auto":  # "any language": Whisper's own choice
             r = srv.transcribe_auto(wav, allowed=allowed, prefer=prefer, prompt=prompt, timeout_s=timeout_s)
         else:
             r = srv.transcribe(wav, language=language, prompt=prompt, timeout_s=timeout_s)

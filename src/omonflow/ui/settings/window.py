@@ -897,9 +897,9 @@ class SettingsWindow(QWidget):
             self.prefer_combo.addItem(label, code)
         self.prefer_combo.setCurrentIndex(max(0, self.prefer_combo.findData(self.settings.prefer_language)))
         self.prefer_combo.currentIndexChanged.connect(self._prefer_changed)
-        lang_note = QLabel("Text is written in the language you spoke; it is never translated on purpose. With an "
-                           "accent Whisper sometimes mistakes the language and then translates. Choosing the language "
-                           "you speak most below makes OmonFlow use it unless the other language is clearly better.")
+        lang_note = QLabel("Text is written in the language you spoke, sentence by sentence: you can switch between "
+                           "English and Indonesian within one dictation. Choosing the language you speak most below "
+                           "helps when your accent makes Whisper unsure.")
         lang_note.setWordWrap(True)
         lang_note.setStyleSheet("color: gray")
         self.prompt_check = QCheckBox("Help recognition of technical words (GPU, Docker, Linux, …)")
