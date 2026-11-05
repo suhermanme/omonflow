@@ -46,6 +46,7 @@ CONFIDENT_LOGPROB = -0.15  # mean token log-prob above which Whisper's language 
 # translated id -0.186; genuine speech beat its translation by 0.1-0.4 with
 # synthetic voices (M06 notes). 0.10 keeps the first and all of the second.
 PREFER_WINDOW = 0.10
+SETTLED_LOGPROB = -0.05  # a single pass in the likely language is enough above this
 LANG_CODES = {"english": "en", "indonesian": "id", "malay": "ms", "javanese": "jw", "sundanese": "su",
               "tagalog": "tl", "dutch": "nl", "welsh": "cy", "chinese": "zh", "japanese": "ja", "korean": "ko",
               "arabic": "ar", "spanish": "es", "french": "fr", "german": "de"}
@@ -468,8 +469,10 @@ class WhisperServer:
             return self.transcribe_auto(wav, allowed, prefer, prompt, timeout_s)
         parts = split_on_pauses(pcm)
         texts, chosen, total_ms, passes = [], [], 0.0, 0
+        hint = None
         for start, end in parts:
-            r = self._best_language(pcm_to_wav(pcm[start:end]), allowed, prefer, prompt, timeout_s)
+            r = self._best_language(pcm_to_wav(pcm[start:end]), allowed, prefer, prompt, timeout_s, hint)
+            hint = r["chosen"]  # consecutive sentences are usually in the same language
             if r["text"]:
                 texts.append(r["text"])
             chosen.append(f"{r['chosen']}{r['logprobs']}")
@@ -480,11 +483,18 @@ class WhisperServer:
         return {"text": " ".join(texts), "elapsed_ms": round(total_ms, 1), "parts": len(parts), "passes": passes,
                 "chosen": max(set(langs), key=langs.count) if langs else None, "languages": langs}
 
-    def _best_language(self, wav: bytes, allowed, prefer, prompt, timeout_s) -> dict:
-        """Transcribe one part in each allowed language; keep the most confident
-        (the preferred language wins unless another is clearly better)."""
-        results, ms_total = {}, 0.0
-        for lang in allowed:
+    def _best_language(self, wav: bytes, allowed, prefer, prompt, timeout_s, hint: str | None = None) -> dict:
+        """Language for one part, in as few passes as possible.
+
+        Whisper's language *detection* costs ~110 ms extra per pass (M06
+        measurement: 270 vs 160 ms), so parts are transcribed with the language
+        given: first the likely one (main language, else the previous part's).
+        It is accepted only when Whisper is very confident (SETTLED_LOGPROB): a
+        forced translation scored -0.10 or worse in every test, so it can't pass.
+        Otherwise the other language is transcribed too and the most confident
+        version wins (the main language unless another is clearly better).
+        """
+        def run(lang: str) -> tuple[float, str, float]:
             fields = {"language": lang, "response_format": "verbose_json", "temperature": "0.0",
                       "temperature_inc": "0.0", "no_language_probabilities": "true"}
             if prompt:
@@ -493,8 +503,17 @@ class WhisperServer:
             segs = data.get("segments") or []
             n = sum(len(x.get("tokens") or []) for x in segs)
             lp = sum((x.get("avg_logprob") or 0.0) * len(x.get("tokens") or []) for x in segs) / n if n else -9.0
-            results[lang] = (lp, (data.get("text") or "").strip())
+            return lp, (data.get("text") or "").strip(), ms
+
+        first = next((l for l in (prefer, hint) if l in allowed), allowed[0])
+        order = [first] + [l for l in allowed if l != first]
+        results, ms_total = {}, 0.0
+        for lang in order:
+            lp, text, ms = run(lang)
+            results[lang] = (lp, text)
             ms_total += ms
+            if lang == first and lp >= SETTLED_LOGPROB:
+                break
         chosen = max(results, key=lambda k: results[k][0])
         if prefer in results and prefer != chosen and results[chosen][0] - results[prefer][0] < PREFER_WINDOW:
             chosen = prefer

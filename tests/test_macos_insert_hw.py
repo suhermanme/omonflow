@@ -95,7 +95,9 @@ def test_clipboard_is_restored(inserter, tmp_path):
     app = TargetApp(tmp_path, "line")
     try:
         res = inserter.insert("ditempel", inserter.capture_target(), "paste", restore_clipboard=True)
-        assert res.ok and app.values()["line"] == "ditempel"
+        assert res.ok and res.ms < 250  # completes without waiting for the clipboard restore
+        assert app.values()["line"] == "ditempel"
+        time.sleep(0.5)  # the restore happens in the background
         assert pb.stringForType_("public.utf8-plain-text") == "ISI CLIPBOARD ASLI"
         assert bytes(pb.dataForType_("com.example.custom")) == b"custom-bytes"
     finally:

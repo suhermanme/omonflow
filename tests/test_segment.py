@@ -46,13 +46,21 @@ class LanguageByLoudness(WhisperServer):
         super().__init__(ServerInfo("none", "env"), Path("."), Path("."))  # never started
         self.calls = []
 
+    auto_lp = -0.03       # Whisper's confidence when it detects the language itself
+    auto_mistake = None   # e.g. "id": Whisper mistakes every part for Indonesian
+
     def _post_inference(self, wav, fields, timeout_s):
         spoken = "en" if np.abs(wav_to_pcm(wav)).max() > 4000 else "id"
         lang = fields["language"]
         self.calls.append(lang)
-        lp = -0.03 if lang == spoken else -0.40  # the translation scores lower
+        if lang == "auto":
+            lang = self.auto_mistake or spoken
+            lp = self.auto_lp if lang == spoken else -0.19  # a misdetection is less confident
+        else:
+            lp = -0.03 if lang == spoken else -0.40  # a forced translation scores lower
         word = {"en": "English", "id": "Indonesia"}[spoken] if lang == spoken else f"translated-{lang}"
-        return {"text": word, "segments": [{"tokens": [1] * 8, "avg_logprob": lp}]}, 10.0
+        name = {"en": "english", "id": "indonesian"}[lang]
+        return {"text": word, "language": name, "segments": [{"tokens": [1] * 8, "avg_logprob": lp}]}, 10.0
 
 
 @pytest.mark.parametrize("prefer", [None, "en", "id"])
@@ -62,3 +70,34 @@ def test_mixed_dictation_keeps_each_language(prefer):
     r = s.transcribe_mixed(pcm_to_wav(pcm), prefer=prefer)
     assert r["text"] == "English Indonesia English" and r["languages"] == ["en", "id", "en"]
     assert "translated" not in r["text"]
+
+
+def mixed():
+    return pcm_to_wav(np.concatenate([tone(2.0, 8000), pause(0.6), tone(2.4, 2500), pause(0.6), tone(2.0, 8000)]))
+
+
+def test_main_language_parts_need_one_pass():
+    s = LanguageByLoudness()
+    r = s.transcribe_mixed(mixed(), prefer="en")
+    assert r["languages"] == ["en", "id", "en"]
+    assert s.calls == ["en", "en", "id", "en"]  # only the Indonesian part needs a second pass
+    assert "auto" not in s.calls  # no costly language detection
+
+
+def test_previous_language_is_tried_first_without_a_preference():
+    s = LanguageByLoudness()
+    pcm = np.concatenate([tone(2.0, 2500), pause(0.6), tone(2.4, 2500), pause(0.6), tone(2.0, 2500)])  # all Indonesian
+    r = s.transcribe_mixed(pcm_to_wav(pcm))
+    assert r["languages"] == ["id", "id", "id"] and s.calls == ["en", "id", "id", "id"]
+
+
+def test_unsure_first_pass_is_never_accepted():
+    class Accented(LanguageByLoudness):  # real voice: genuine text only moderately confident
+        def _post_inference(self, wav, fields, timeout_s):
+            d, ms = super()._post_inference(wav, fields, timeout_s)
+            lang, spoken = fields["language"], "en" if np.abs(wav_to_pcm(wav)).max() > 4000 else "id"
+            d["segments"][0]["avg_logprob"] = -0.15 if lang == spoken else -0.19  # translation almost as good
+            return d, ms
+    s = Accented()
+    r = s.transcribe_mixed(mixed())
+    assert r["languages"] == ["en", "id", "en"] and r["passes"] == 6

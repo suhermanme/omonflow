@@ -1,8 +1,44 @@
 {
-  "date": "2026-11-05 20:44",
+  "date": "2026-11-05 22:15",
   "skipped": {},
   "results": [
     {
+      "app": "iTerm",
+      "strategy": "auto",
+      "text": "unicode + Return",
+      "outcome": "inserted",
+      "method": "paste",
+      "verified": true,
+      "readback_correct": false,
+      "readback": null,
+      "ms": 435.4,
+      "error": null
+    },
+    {
+      "app": "iTerm",
+      "strategy": "paste",
+      "text": "unicode + Return",
+      "outcome": "inserted",
+      "method": "paste",
+      "verified": null,
+      "readback_correct": true,
+      "readback": "Halo, rapat jam 10.30 — café ✓ GPU VRAM 🎙️",
+      "ms": 157.8,
+      "error": null
+    },
+    {
+      "app": "iTerm",
+      "strategy": "type",
+      "text": "unicode + Return",
+      "outcome": "inserted",
+      "method": "paste",
+      "verified": null,
+      "readback_correct": true,
+      "readback": "Halo, rapat jam 10.30 — café ✓ GPU VRAM 🎙️",
+      "ms": 161.1,
+      "error": null
+    },
+    {
       "app": "TextEdit",
       "strategy": "auto",
       "text": "unicode",
@@ -10,7 +46,7 @@
       "method": "accessibility",
       "verified": true,
       "readback_correct": true,
-      "ms": 55.9,
+      "ms": 17.1,
       "error": null
     },
     {
@@ -21,7 +57,7 @@
       "method": "accessibility",
       "verified": true,
       "readback_correct": true,
-      "ms": 29.3,
+      "ms": 8.3,
       "error": null
     },
     {
@@ -32,7 +68,7 @@
       "method": "paste",
       "verified": true,
       "readback_correct": true,
-      "ms": 354.5,
+      "ms": 168.6,
       "error": null
     },
     {
@@ -43,7 +79,7 @@
       "method": "paste",
       "verified": true,
       "readback_correct": true,
-      "ms": 313.9,
+      "ms": 165.0,
       "error": null
     },
     {
@@ -54,7 +90,7 @@
       "method": "typing",
       "verified": true,
       "readback_correct": true,
-      "ms": 72.8,
+      "ms": 147.3,
       "error": null
     },
     {
@@ -65,145 +101,7 @@
       "method": "paste",
       "verified": true,
       "readback_correct": true,
-      "ms": 311.4,
-      "error": null
-    },
-    {
-      "app": "Safari",
-      "strategy": "auto",
-      "text": "unicode",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": true,
-      "readback_correct": true,
-      "ms": 312.2,
-      "error": null
-    },
-    {
-      "app": "Safari",
-      "strategy": "auto",
-      "text": "multiline",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": true,
-      "readback_correct": true,
-      "ms": 313.7,
-      "error": null
-    },
-    {
-      "app": "Safari",
-      "strategy": "paste",
-      "text": "unicode",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": true,
-      "readback_correct": true,
-      "ms": 313.3,
-      "error": null
-    },
-    {
-      "app": "Safari",
-      "strategy": "paste",
-      "text": "multiline",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": true,
-      "readback_correct": true,
-      "ms": 313.2,
-      "error": null
-    },
-    {
-      "app": "Safari",
-      "strategy": "type",
-      "text": "unicode",
-      "outcome": "inserted",
-      "method": "typing",
-      "verified": true,
-      "readback_correct": true,
-      "ms": 70.6,
-      "error": null
-    },
-    {
-      "app": "Safari",
-      "strategy": "type",
-      "text": "multiline",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": true,
-      "readback_correct": true,
-      "ms": 311.7,
-      "error": null
-    },
-    {
-      "app": "Terminal",
-      "strategy": "auto",
-      "text": "unicode + Return",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": true,
-      "readback_correct": true,
-      "readback": "Halo, rapat jam 10.30 — café ✓ GPU VRAM 🎙️",
-      "ms": 312.2,
-      "error": null
-    },
-    {
-      "app": "Terminal",
-      "strategy": "paste",
-      "text": "unicode + Return",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": true,
-      "readback_correct": true,
-      "readback": "Halo, rapat jam 10.30 — café ✓ GPU VRAM 🎙️",
-      "ms": 315.7,
-      "error": null
-    },
-    {
-      "app": "Terminal",
-      "strategy": "type",
-      "text": "unicode + Return",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": true,
-      "readback_correct": true,
-      "readback": "Halo, rapat jam 10.30 — café ✓ GPU VRAM 🎙️",
-      "ms": 317.8,
-      "error": null
-    },
-    {
-      "app": "iTerm",
-      "strategy": "auto",
-      "text": "unicode + Return",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": null,
-      "readback_correct": false,
-      "readback": null,
-      "ms": 612.7,
-      "error": null
-    },
-    {
-      "app": "iTerm",
-      "strategy": "paste",
-      "text": "unicode + Return",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": null,
-      "readback_correct": false,
-      "readback": null,
-      "ms": 315.5,
-      "error": null
-    },
-    {
-      "app": "iTerm",
-      "strategy": "type",
-      "text": "unicode + Return",
-      "outcome": "inserted",
-      "method": "paste",
-      "verified": null,
-      "readback_correct": false,
-      "readback": null,
-      "ms": 315.6,
+      "ms": 163.8,
       "error": null
     }
   ]

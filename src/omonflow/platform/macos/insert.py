@@ -28,10 +28,10 @@ from omonflow.insertion.base import InsertResult, Target
 LOG = logging.getLogger("omonflow.insert")
 ACCESSIBILITY_URL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 KEY_V, KEY_RETURN = 9, 36
-# Focused elements that can never receive text. Only used when the app exposes
-# its focused element; unknown roles are always attempted (never block blindly).
-NOT_EDITABLE_ROLES = {"AXWebArea", "AXStaticText", "AXWindow", "AXButton", "AXLink", "AXImage", "AXApplication",
-                      "AXScrollArea", "AXHeading", "AXMenuBar", "AXToolbar"}
+# Focused elements that are clearly not text input. Deliberately narrow:
+# windows/scroll areas are left out because custom-drawn editors and terminals
+# (e.g. iTerm right after launch) report themselves that way while accepting keys.
+NOT_EDITABLE_ROLES = {"AXWebArea", "AXStaticText", "AXButton", "AXLink", "AXImage", "AXHeading"}
 TYPE_CHUNK = 20            # UTF-16 units per keyboard event
 PASTE_SETTLE_S = 0.25      # time for the target app to read the pasteboard
 FOCUS_TIMEOUT_S = 1.0
@@ -109,6 +109,7 @@ class MacInserter:
         self.tracker = FocusTracker()
         self._carbon = None
         self._ax_enabled: set[int] = set()
+        self._pending_restore = None
 
     # ------------------------------------------------------------ permission / state
     def trusted(self) -> bool:
@@ -390,7 +391,7 @@ class MacInserter:
     def _verify(self, el, text, before=None) -> bool | None:
         if el is None:
             return None
-        time.sleep(0.05)
+        time.sleep(0.12)  # most apps apply a paste within ~100 ms
         after = self._value(el)
         if after is None:
             return None
@@ -422,9 +423,17 @@ class MacInserter:
             ev = Q.CGEventCreateKeyboardEvent(None, KEY_V, down)
             Q.CGEventSetFlags(ev, Q.kCGEventFlagMaskCommand)  # explicit: no stray modifiers
             Q.CGEventPost(Q.kCGHIDEventTap, ev)
-        time.sleep(PASTE_SETTLE_S)
         if saved is not None:
-            self._clipboard_restore(saved, count)
+            # Restore the user's clipboard once the app has read ours, in the
+            # background so the dictation completes immediately. Skipped if the
+            # clipboard changed meanwhile (e.g. the user copied something).
+            import threading
+
+            t = threading.Timer(PASTE_SETTLE_S, self._clipboard_restore, args=(saved, count))
+            t.daemon = True
+            t.start()
+            self._pending_restore = t
+        time.sleep(0.03)  # let the key events reach the app before read-back
 
     @staticmethod
     def _pb():

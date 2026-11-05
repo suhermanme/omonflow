@@ -78,4 +78,21 @@ uv run python tools/validation/omonflow_validate.py --whisper-server $(which whi
 | English inserted as (badly translated) Indonesian | Whisper translates when it picks the wrong language; the old hint named Indonesian; on the owner's accented voice the translation scored almost as high as the real text | Neutral vocabulary hint; confidence-based choice between English and Indonesian; optional main language that wins unless the other is clearly better | Owner |
 | Indonesian parts of a mixed dictation translated to English (and, reproduced, dropped) | Whisper decodes a whole window in one language | Auto splits the finished recording at pauses and chooses the language per part (contiguous parts, nothing dropped) | Real-mic test 2/2 and **owner confirmed** |
 
-Cost of per-sentence language choice: two transcription passes per part (Stop → inserted ≈ 1.8 s for 12 s of mixed speech, ≈ 0.3 s for one sentence). Optimising this (e.g. a fast single pass when the language is unambiguous) is left for later.
+**Speed improvement (owner request).** Measured cause: Whisper's language *detection* adds ~110 ms per pass (270 vs 160 ms), and the clipboard restore held the dictation for 250 ms. Changes:
+- Each sentence is first transcribed in the likely language (main language, else the previous sentence's). It is accepted only when Whisper is very confident (mean log-prob ≥ −0.05; forced translations scored −0.10 or worse in every test); otherwise the other language is tried too.
+- The clipboard is restored in the background.
+- Rejected: shrinking Whisper's audio window (`audio_ctx`), which was 3× faster but garbled the Indonesian sentence.
+
+| 12 s mixed EN/ID/EN dictation, real mic | Stop → text in the app |
+|---|---|
+| Before (owner's test) | ~1.8 s |
+| After, main language English | **1.05 s**, before the background clipboard restore (−0.15 s more since) |
+| After, no main language | 1.32 s, likewise |
+
+| Per part | Before | After |
+|---|---|---|
+| English sentence | 270–320 ms | 155–165 ms |
+| Indonesian sentence | 330–440 ms | 330–340 ms |
+| Paste incl. clipboard handling | ~310 ms | ~160 ms |
+
+The "no text field selected" check was narrowed to clearly non-text roles after it misjudged iTerm right after launch.
