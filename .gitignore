@@ -6,3 +6,5 @@ __pycache__/
 *.dylib
 .DS_Store
 tools/validation/work/
+build/
+dist/

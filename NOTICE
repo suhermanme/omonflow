@@ -1,0 +1,19 @@
+OmonFlow
+Copyright (c) 2026 suhermanme. Licensed under the MIT License (see LICENSE).
+
+Code adapted from voice-client
+  https://github.com/suhermanme/voice-client
+  Copyright (c) 2026 suhermanme, MIT License.
+  Adapted files (each carries an origin header):
+    src/omonflow/ui/visualizers/base.py          (state colours, labels)
+    src/omonflow/ui/visualizers/spectrum_pill.py (Spectrum Pill)
+    src/omonflow/ui/visualizers/orb.py           (Orb)
+    src/omonflow/ui/visualizers/circular_wave.py (Circular Wave)
+
+Third-party components distributed with OmonFlow builds:
+  Qt for Python (PySide6, shiboken6)  LGPLv3     https://www.qt.io/qt-for-python
+  global-hotkey (Rust crate)          MIT/Apache-2.0
+  PyO3 (Rust crate)                   MIT/Apache-2.0
+  platformdirs                        MIT
+  PyObjC (macOS builds)               MIT
+A complete third-party license file is generated at packaging time (M09).

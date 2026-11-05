@@ -17,8 +17,9 @@ Implements [SPEC.md](SPEC.md) §21.
 
 | Milestone | Status |
 |---|---|
-| M01 Repository assessment and architecture | **Deliverables complete; awaiting formal sign-off** |
-| M02–M09 | Not started; M02 awaits approval |
+| M01 Repository assessment and architecture | Complete (owner continued to M02 on 2026-11-05) |
+| M02 Application foundation | **Implemented and tested on macOS; owner review requested** ([report](M02-report.md)) |
+| M03–M09 | Not started; M03 awaits approval |
 
 ## Dependencies
 
@@ -55,7 +56,7 @@ tools/validation runs (owner, any time) ─────────────�
 - [x] Validation kit prepared: `hwprobe.py` run on M4 Pro.
 - [ ] `whisper_bench.py` end-to-end run: blocked in the agent sandbox; first owner run validates it.
 - [ ] voice-client test suite: not run (sandbox blocked running downloaded code).
-- [ ] Owner sign-off.
+- [x] Owner sign-off (owner instructed "commit, and continue", 2026-11-05).
 
 ---
 
@@ -116,6 +117,8 @@ tools/validation runs (owner, any time) ─────────────�
 - Device discovery and selection, format-generic input, warm-up handling, CAPTURE_READY/activity signals, timeout + worker retirement, device loss, finalize (trim, resample, WAV), shutdown.
 - Audio Input settings: device, test, level, startup diagnostics, timeout.
 - Comparison harness.
+
+**Inputs from M02:** recording animation costs 13–46 % of a core on the Python side, so include it as "UI load" in the comparison. The first packaged run with real capture must confirm the mic permission prompt names OmonFlow (M02 criterion 9).
 
 **Acceptance criteria:**
 1. No stream exists while idle, checked by engine state **and** OS-level device-in-use check on macOS. Linux/Windows checks are run in M08.
@@ -215,3 +218,6 @@ tools/validation runs (owner, any time) ─────────────�
 | 2026-11-05 | No paid certificates in development; macOS ad-hoc, Windows unsigned | Owner |
 | 2026-11-05 | Mic states INITIALIZING / CAPTURE_READY / RECORDING / FINALIZING; activity detection is UI-only | Owner |
 | 2026-11-05 | M08 split into M08 (Windows/Linux) and M09 (packaging/release) | Owner |
+| 2026-11-05 | Proceed to M02 with default prerequisites (MIT, `io.github.suhermanme.omonflow`, local repo, ad-hoc signing) | Owner ("continue") |
+| 2026-11-05 | Idle widget is static (no animation) to meet the < 1 % idle CPU target | M02 measurement |
+| 2026-11-05 | ⌘⌥ opt-in shortcut deferred to M05 | M02 scope |

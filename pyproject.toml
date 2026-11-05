@@ -1,0 +1,40 @@
+[build-system]
+requires = ["maturin>=1.16,<2"]
+build-backend = "maturin"
+
+[project]
+name = "omonflow"
+version = "0.1.0.dev0"
+description = "Local-first cross-platform desktop dictation"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "suhermanme", email = "edy.suherman@gmail.com" }]
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "PySide6-Essentials>=6.11,<6.12",
+    "platformdirs>=4.3",
+    "pyobjc-framework-Cocoa>=11; sys_platform == 'darwin'",
+]
+
+[project.scripts]
+omonflow = "omonflow.app.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "maturin>=1.16,<2",
+    "pyobjc-framework-Quartz>=11; sys_platform == 'darwin'",
+]
+package = ["pyinstaller>=6.11"]
+
+[tool.maturin]
+python-source = "src"
+module-name = "omonflow._core"
+manifest-path = "rust/Cargo.toml"
+features = ["pyo3/extension-module"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

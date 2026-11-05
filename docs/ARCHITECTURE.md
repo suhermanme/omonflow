@@ -26,6 +26,11 @@ How OmonFlow implements [SPEC.md](SPEC.md). Evidence and measurements are in [M0
 - Rust never calls into Python. Events and levels are pulled by the pump thread.
 - Every blocking call (open, finalize, HTTP, insertion) runs off the Qt main thread.
 
+**M02 implementation notes:**
+- The widget is static in IDLE and ERROR, animates at 30 fps otherwise, and never paints while hidden.
+- Signals (Ctrl-C, SIGTERM) discard an active session and quit; the menu's Quit asks first.
+- Platform minimums from the dependency check: macOS 13, glibc 2.34.
+
 ## 2. Repository layout
 
 A maturin mixed project: one `pyproject.toml` builds the Rust extension and the Python package, and `uv sync` builds everything.
