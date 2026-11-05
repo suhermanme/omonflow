@@ -43,9 +43,9 @@ OmonFlow/
 │   ├── app/                  # main, lifecycle, single instance (QLocalServer), orchestrator
 │   ├── core/                 # states, events, interfaces (AudioBackend, Inserter, ShortcutBackend, …)
 │   ├── audio/                # facade, Rust adapter, sounddevice fallback
-│   ├── stt/                  # whisper process manager, client, model manager
+│   ├── stt/                  # whisper process manager, client, models, language choice, pause splitting
 │   ├── hardware/             # detection, backend availability/validation, benchmark
-│   ├── refinement/
+│   ├── refinement/           # clean rules, OpenAI-compatible client, result check, keychain
 │   ├── insertion/            # focus tracking, layered inserters
 │   ├── shortcuts/            # registered-combo and monitoring backends, status model
 │   ├── platform/{macos,windows,linux}/
@@ -182,6 +182,12 @@ Long or multiline text prefers paste.
 - The transient clipboard entry carries `org.nspasteboard.TransientType`.
 - History is saved before insertion.
 
+**Changes from owner testing (M06–M07):**
+- An app whose focused element can't take text (web page content, buttons, static text) gets the text copied with "No text field is selected in …"; other roles are tried normally (terminals expose unusual roles).
+- An insertion the app can't confirm (e.g. Chrome silently drops a paste with no text box focused) ends in SUCCESS labelled "Done · click to copy" for 4 s.
+- Without Accessibility permission the widget says "Copied — ⌘V" (not an error).
+- The clipboard is restored on a background timer 0.25 s after ⌘V, so insertion returns ~150 ms sooner.
+
 ## 5. Global shortcut (show/hide only)
 
 `ShortcutService` uses pluggable backends. Each one reports **registered / unavailable / permission denied / conflict / not supported**.
@@ -213,6 +219,13 @@ macOS default: **⌘⇧Space** (registered). ⌘⌥ tap is opt-in under Settings
 - **Devices:** from whisper.cpp's log (`device N: NAME (type: T)`; types 1/2 are GPUs), selected with `--no-gpu` / `--device N`.
 - **Switching:** candidate server → requested-backend check → self-test with `resources/jfk.wav` → swap. Settings are committed only after success.
 - **Validation:** runs in a separate temporary server, with results stored in `backend-validations.json` per executable, version, device and model.
+
+**Language handling (owner testing, after M06):** Whisper *translates* when it decodes in the wrong language, so OmonFlow never trusts a single guess.
+- Settings → Dictation: Automatic (English or Indonesian, as spoken; default), Always English, Always Indonesian, Automatic (any language), plus an optional main language.
+- Automatic splits the finished recording at pauses (`stt/segment.py`: ≥ 300 ms pauses, parts ≥ 1.2 s, contiguous so nothing is dropped) and picks the language per part.
+- Per part, a forced pass in the likely language (main language, else the previous part's) is accepted if its mean token log-probability is ≥ −0.05; otherwise the other language is also run and the more confident text wins, with the main language winning ties within 0.10. A forced translation never scored above −0.10 in tests.
+- The vocabulary hint names technical words only, never a language. `audio_ctx` shortening was rejected (garbled Indonesian).
+- Segment texts are joined with Whisper's own spacing (`segment_text`), not whisper-server's line breaks, which could split a word.
 - **Idle unload:** reload is triggered when dictation starts, and is also handled inside `transcribe`.
 
 ## 7. Storage, privacy and config
@@ -243,13 +256,15 @@ macOS default: **⌘⇧Space** (registered). ⌘⌥ tap is opt-in under Settings
 - **voice-client:** MIT, © 2026 suhermanme. It's the same owner, so the license has no compatibility issue.
   - Copied or adapted files carry a header: `Adapted from voice-client (https://github.com/suhermanme/voice-client), Copyright (c) 2026 suhermanme, MIT License.`
   - `NOTICE` lists the origin.
-- **OmonFlow's own license:** to be chosen by the owner before M02 (PLAN prerequisites).
+- **OmonFlow's own license:** MIT, © 2026 suhermanme (owner decision; confirmed again after M07).
 - **Third-party:**
   - PySide6/Qt: LGPLv3. Dynamic libraries, license texts, source offer.
   - whisper.cpp/ggml: MIT.
   - cpal: Apache-2.0.
   - PyO3, rtrb: MIT/Apache-2.0.
-  - httpx, numpy: BSD.
+  - numpy: BSD-3-Clause.
+  - keyring, jaraco.*, more-itertools, platformdirs, PyObjC: MIT.
+  - HTTP (whisper-server, AI refinement) uses the Python standard library; no HTTP client dependency.
   - sounddevice: MIT; PortAudio: MIT-style.
   - Whisper weights: MIT (downloaded, not bundled).
   - CUDA redistributables: NVIDIA EULA (decided in M06/M09).

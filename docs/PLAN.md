@@ -22,7 +22,7 @@ Implements [SPEC.md](SPEC.md) §21.
 | M03 On-demand audio core | Complete on macOS ([report](M03-report.md)); gate decided: Rust primary |
 | M04 Whisper process manager and models | Complete on macOS ([report](M04-report.md)) |
 | M05 Dictation MVP (macOS) | Complete on macOS ([report](M05-report.md)) |
-| M06 Hardware and inference settings | **Implemented and validated on the M4 Pro; other machines pending; owner review requested** ([report](M06-report.md)) |
+| M06 Hardware and inference settings | Complete on the M4 Pro ([report](M06-report.md)); owner continued; i9/RX580 and RTX 3060 runs pending |
 | M07 Text refinement | **Implemented and tested on macOS with the owner's LLM; owner review requested** ([report](M07-report.md)) |
 | M08–M09 | Not started; M08 awaits approval |
 
@@ -184,7 +184,7 @@ tools/validation runs (owner, any time) ─────────────�
 - A failed backend rolls back to the previous working config with an explanation.
 - Profiles never overwrite manual choices.
 
-**M06 inputs:** owner runs `tools/validation` on the i9/RX580 and RTX 3060; Windows swap needs per-process log names (M08).
+**Open inputs:** M07 owner check with own voice and AI mode; owner runs `tools/validation` on the i9/RX580 and RTX 3060; Windows swap needs per-process log names (M08).
 
 ## M07 — Text refinement
 
