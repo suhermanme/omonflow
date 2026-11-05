@@ -8,7 +8,17 @@ Repeatable inventory and benchmark scripts for the three validation machines (SP
 | `whisper_bench.py` | Builds whisper.cpp per backend (cpu/metal/cuda/vulkan), downloads models with Hugging Face SHA-256 verification, runs a warm-up + N timed transcriptions, and marks a backend **validated** only if it built, its init appears in whisper's own log, and transcription succeeded | git, cmake, C/C++ compiler; CUDA toolkit or Vulkan SDK for those backends |
 | `../../poc/rust_audio_poc/on_demand.py` | Mic open → ready → record → stop → release timing per input device (the Rust capture PoC) | Rust toolchain, uv; Linux: `libasound2-dev pkg-config` |
 
-All output goes to `results/<hostname>-<timestamp>/`. Please send back the whole folder.
+| `omonflow_validate.py` | Runs **OmonFlow's own** detection and backend validation (Settings → Hardware & Acceleration) against a given whisper-server build and model: lists the devices whisper.cpp reports, then benchmarks each in a separate process | OmonFlow dev env (`uv sync`), a whisper-server build, a model |
+
+All output goes to `results/`. Please send back the whole folder.
+
+After `whisper_bench.py` has built the backends, run once per build, for example:
+
+```bash
+uv run python tools/validation/omonflow_validate.py \
+  --whisper-server tools/validation/work/whisper.cpp/build-cuda/bin/whisper-server \
+  --model tools/validation/work/models/ggml-small.bin
+```
 
 ## Per-machine steps
 

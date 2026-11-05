@@ -49,7 +49,7 @@ def test_start_ready_backend_and_transcribe(fake_exe, tmp_path, model):
     assert st.state == "ready" and st.port and st.pid and st.start_ms > 0
     assert st.backend == "Metal"
     assert json.loads(s.pidfile.read_text())["pid"] == st.pid
-    assert s.transcribe(b"RIFF....")["text"] == "fake transcript from ggml-tiny.bin"
+    assert s.transcribe(b"RIFF....")["text"].endswith("[ggml-tiny.bin]")
     s.stop()
     assert s.status.state == "stopped" and not s.pidfile.exists()
 

@@ -58,6 +58,10 @@ class Settings:
     audio_device_name: str | None = None  # also used by the Python fallback
     mic_timeout_ms: int = 3000
     whisper_model: str = "small"
+    whisper_backend: str = "auto"         # "auto" or a backends.Device key (cpu, metal:0, cuda:0, vulkan:1)
+    whisper_threads: int = 0              # 0 = automatic
+    profile: str = "balanced"             # fast | balanced | accurate | custom
+    unload_idle_min: int = 0              # 0 = keep the model loaded
     language: str = "auto"                # auto | en | id
     bilingual_prompt: bool = True         # Indonesian–English technical vocabulary hint
     insertion_strategy: str = "auto"      # auto | paste | type

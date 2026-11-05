@@ -53,7 +53,7 @@ class ServerInfo:
 
 
 @dataclass
-class ServerStatus:
+class ServerStatus:  # noqa: D101
     state: str = "stopped"    # stopped | starting | loading | ready | restarting | failed
     pid: int | None = None
     port: int | None = None
@@ -64,6 +64,7 @@ class ServerStatus:
     load_ms: float | None = None    # last /load duration
     restarts: int = 0
     error: str | None = None
+    devices: list = field(default_factory=list)  # stt.backends.Device list from the log
 
 
 def find_executable(bundle_dir: Path | None = None) -> ServerInfo | None:
@@ -123,7 +124,8 @@ def _cmdline(pid: int) -> str:
 
 class WhisperServer:
     def __init__(self, info: ServerInfo, state_dir: Path, log_dir: Path, threads: int | None = None,
-                 use_gpu: bool = True, on_status=None, extra_args: list[str] | None = None) -> None:
+                 use_gpu: bool = True, on_status=None, extra_args: list[str] | None = None,
+                 log_name: str = "whisper-server.log", pid_name: str = "whisper-server.pid.json") -> None:
         self.info = info
         self.state_dir = state_dir
         self.log_dir = log_dir
@@ -132,8 +134,8 @@ class WhisperServer:
         self.extra_args = extra_args or []
         self.on_status = on_status or (lambda st: None)
         self.status = ServerStatus()
-        self.pidfile = state_dir / "whisper-server.pid.json"
-        self.log_path = log_dir / "whisper-server.log"
+        self.pidfile = state_dir / pid_name
+        self.log_path = log_dir / log_name
         self._proc: subprocess.Popen | None = None
         self._lock = threading.RLock()
         self._stopping = False
@@ -159,7 +161,7 @@ class WhisperServer:
         port = free_port()
         args = [self.info.executable, "--model", str(model_path), "--host", "127.0.0.1", "--port", str(port),
                 "--threads", str(self.threads), "--inference-path", "/inference"]
-        if not self.use_gpu:
+        if not self.use_gpu and "--no-gpu" not in self.extra_args:
             args.append("--no-gpu")
         args += self.extra_args
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -396,6 +398,8 @@ class WhisperServer:
             return
         self.status.evidence = [l.strip() for l in lines if EVIDENCE.search(l)][-8:]
         self.status.backend = parse_backend(lines, self.use_gpu)
+        from .backends import parse_devices
+        self.status.devices = parse_devices(lines)
 
     def refresh_evidence(self) -> None:
         """The server's log is written with buffering: re-read after a while."""

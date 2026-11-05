@@ -112,6 +112,11 @@ class OmonFlowApp:
         self.settings_win.timeout_changed.connect(self._timeout_changed)
         self.settings_win.mic_test_requested.connect(self._mic_test)
         self.settings_win.model_selected.connect(self._model_selected)
+        self.settings_win.engine_config_requested.connect(self._engine_config)
+        self.settings_win.unload_changed.connect(self._unload_changed)
+        self.whisper.task_done.connect(self._commit_engine_config)
+        self.orch.state_changed.connect(lambda st: st == State.INITIALIZING.value and self.whisper.prepare())
+        self._pending_engine: dict | None = None
         self.settings_win.request_accessibility.connect(self._request_accessibility)
         self.settings_win.open_history.connect(self.show_history)
         self.settings_win.clear_history.connect(self._clear_history)
@@ -136,9 +141,11 @@ class OmonFlowApp:
         LOG.info("diagnostics: %s", self.diagnostics())
         if self.audio_fallback_reason:
             self._notice("warning", f"Audio: {self.audio_fallback_reason}")
+        self.whisper.set_unload_idle(self.settings.unload_idle_min)
         if start_engine:
             self.whisper.refresh_catalog()
-            self.whisper.ensure_running(self.settings.whisper_model)
+            self.whisper.ensure_running(self.settings.whisper_model, device=self.settings.whisper_backend,
+                                        threads=self.settings.whisper_threads)
         if store.recovered_from:
             self._notice("warning", f"Settings were unreadable and have been reset. Backup: {store.recovered_from}")
 
@@ -309,9 +316,31 @@ class OmonFlowApp:
 
     # ------------------------------------------------------------ speech recognition
     def _model_selected(self, model_id: str) -> None:
-        self.settings.whisper_model = model_id
+        # A hand-picked model makes the profile "custom" (profiles never override choices).
+        self._engine_config(model_id, self.settings.whisper_backend, self.settings.whisper_threads, "custom")
+
+    def _engine_config(self, model: str, device: str, threads: int, profile: str) -> None:
+        """Request a new engine configuration; settings are saved only once it works (SPEC §9.8)."""
+        self._pending_engine = {"whisper_model": model, "whisper_backend": device, "whisper_threads": threads,
+                                "profile": profile}
+        self.whisper.ensure_running(model, device=device, threads=threads)
+
+    def _commit_engine_config(self, subject: str, task: str, ok: bool, message: str) -> None:
+        if task != "engine" or self._pending_engine is None or subject != self._pending_engine["whisper_model"]:
+            return
+        pending, self._pending_engine = self._pending_engine, None
+        if ok:
+            for k, v in pending.items():
+                setattr(self.settings, k, v)
+            self._save()
+            self.settings_win.refresh_models()
+        else:
+            LOG.info("engine configuration not applied: %s", message)
+
+    def _unload_changed(self, minutes: int) -> None:
+        self.settings.unload_idle_min = minutes
+        self.whisper.set_unload_idle(minutes)
         self._save()
-        self.whisper.ensure_running(model_id)
 
     def _whisper_task_done(self, model_id: str, task: str, ok: bool, message: str) -> None:
         if not ok and task in ("engine", "download", "import"):

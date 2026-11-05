@@ -4,6 +4,7 @@ Behaviour via environment variables:
   FAKE_LOAD_S       seconds spent "loading" before /health is ok (default 0.2)
   FAKE_CRASH_AFTER  exit(3) this many seconds after becoming ready
   FAKE_BACKEND      backend name in the log (default MTL0); "none" → no GPU
+  FAKE_DEVICES      comma list of NAME:TYPE listed at start (default "BLAS:3,<FAKE_BACKEND>:1")
 """
 
 import argparse
@@ -21,15 +22,20 @@ ap.add_argument("--port", type=int)
 ap.add_argument("--threads")
 ap.add_argument("--inference-path", default="/inference")
 ap.add_argument("--no-gpu", action="store_true")
+ap.add_argument("--device", type=int, default=0)
 args, _ = ap.parse_known_args()
 
 state = {"ready": False, "model": args.model}
 backend = os.environ.get("FAKE_BACKEND", "MTL0")
+devices = [d.split(":") for d in os.environ.get("FAKE_DEVICES", f"BLAS:3,{backend}:1").split(",") if d and backend != "none"]
+gpus = [n for n, t in devices if t in ("1", "2")]
 print(f"whisper_init_with_params_no_state: use gpu    = {0 if args.no_gpu else 1}", flush=True)
-if args.no_gpu or backend == "none":
+for i, (n, t) in enumerate(devices):
+    print(f"whisper_backend_init_gpu: device {i}: {n} (type: {t})", flush=True)
+if args.no_gpu or not gpus or args.device >= len(gpus):
     print("whisper_backend_init_gpu: no GPU found", flush=True)
 else:
-    print(f"whisper_backend_init_gpu: using {backend} backend", flush=True)
+    print(f"whisper_backend_init_gpu: using {gpus[args.device]} backend", flush=True)
 
 
 def load(path):
@@ -78,7 +84,8 @@ class H(BaseHTTPRequestHandler):
             ok = load(field(body, "model"))
             self._json(200, {}) if ok else self._json(500, {"error": "failed to load model"})
         elif self.path == args.inference_path:
-            self._json(200, {"text": f" fake transcript from {os.path.basename(state['model'])} "})
+            # Contains the self-test words of the bundled jfk.wav sample.
+            self._json(200, {"text": f" And so, ask not what your country can do for you. [{os.path.basename(state['model'])}] "})
         else:
             self._json(404, {})
 

@@ -5,10 +5,11 @@ Closing the window only hides it; OmonFlow keeps running.
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSize, Qt, Signal
+from PySide6.QtCore import QRectF, QSize, Qt, Signal, Slot
 from PySide6.QtGui import QImage, QKeySequence, QPainter, QPixmap
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
@@ -89,6 +90,8 @@ class SettingsWindow(QWidget):
     timeout_changed = Signal(int)
     mic_test_requested = Signal()
     model_selected = Signal(str)
+    engine_config_requested = Signal(str, str, int, str)  # (model, device key, threads, profile)
+    unload_changed = Signal(int)
     request_accessibility = Signal()
     open_history = Signal()
     clear_history = Signal()
@@ -109,7 +112,8 @@ class SettingsWindow(QWidget):
         for key, title, build in [
             ("general", "General", self._general), ("appearance", "Appearance", self._appearance),
             ("dictation", "Dictation", self._dictation), ("audio", "Audio Input", self._audio),
-            ("speech", "Speech Recognition", self._speech), ("insertion", "Text Insertion", self._insertion),
+            ("speech", "Speech Recognition", self._speech), ("hardware", "Hardware & Acceleration", self._hardware),
+            ("insertion", "Text Insertion", self._insertion),
             ("privacy", "Privacy && History", self._privacy), ("about", "About && Diagnostics", lambda: self.about),
         ]:
             self._tab_index[key] = self.tabs.addTab(build(), title)
@@ -129,6 +133,8 @@ class SettingsWindow(QWidget):
         key = next((k for k, i in self._tab_index.items() if i == idx), None)
         if key == "audio":
             self.refresh_audio()
+        elif key == "hardware":
+            self.refresh_hardware()
         elif key == "insertion":
             self.refresh_insertion()
 
@@ -595,6 +601,275 @@ class SettingsWindow(QWidget):
         if task != "engine" and not ok:
             QMessageBox.warning(self, "Model", message)
         self.refresh_models()
+
+    # ------------------------------------------------------------ Hardware & Acceleration
+    def _hardware(self) -> QWidget:
+        from PySide6.QtWidgets import QScrollArea
+
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        hw = QGroupBox("This computer")
+        hv = QVBoxLayout(hw)
+        self.hw_label = QLabel("Detecting…")
+        self.hw_label.setWordWrap(True)
+        self.hw_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        hv.addWidget(self.hw_label)
+        lay.addWidget(hw)
+
+        be = QGroupBox("Speech recognition backends")
+        bv = QVBoxLayout(be)
+        self.backend_table = QTableWidget(0, 6)
+        self.backend_table.setHorizontalHeaderLabels(["Backend", "Detected", "Available", "Validated", "Active", ""])
+        self.backend_table.verticalHeader().setVisible(False)
+        self.backend_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.backend_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.backend_table.setWordWrap(True)
+        self.backend_table.setMinimumHeight(150)
+        hh = self.backend_table.horizontalHeader()
+        for c in (0, 1, 2, 4, 5):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.Stretch)
+        bv.addWidget(self.backend_table)
+        note = QLabel("A GPU being present does not mean it is used. “Available” comes from whisper.cpp itself, "
+                      "“Validated” from a benchmark on this computer, “Active” from the running engine’s own log.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray")
+        bv.addWidget(note)
+        lay.addWidget(be)
+
+        cfg = QGroupBox("Settings")
+        g = QGridLayout(cfg)
+        self.profile_combo = QComboBox()
+        from omonflow.stt.profiles import PROFILES
+
+        for key, text in PROFILES.items():
+            self.profile_combo.addItem(text.split(":")[0], key)  # short name; description in the hint
+        self.profile_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.profile_combo.setCurrentIndex(max(0, self.profile_combo.findData(self.settings.profile)))
+        self.profile_combo.currentIndexChanged.connect(self._show_recommendation)
+        self.profile_hint = QLabel()
+        self.profile_hint.setWordWrap(True)
+        self.profile_apply = QPushButton("Apply profile…")
+        self.profile_apply.clicked.connect(self._apply_profile)
+        self.backend_combo = QComboBox()
+        self.threads_spin = QSpinBox()
+        self.threads_spin.setRange(0, os.cpu_count() or 64)
+        self.threads_spin.setSpecialValueText("Automatic")
+        self.threads_spin.setValue(self.settings.whisper_threads)
+        apply_btn = QPushButton("Apply")
+        apply_btn.clicked.connect(self._apply_backend)
+        self.unload_combo = QComboBox()
+        for minutes, text in ((0, "Never (fastest response)"), (5, "After 5 minutes"), (15, "After 15 minutes"),
+                              (30, "After 30 minutes"), (60, "After 1 hour")):
+            self.unload_combo.addItem(text, minutes)
+        self.unload_combo.setCurrentIndex(max(0, self.unload_combo.findData(self.settings.unload_idle_min)))
+        self.unload_combo.currentIndexChanged.connect(lambda: self.unload_changed.emit(self.unload_combo.currentData()))
+        g.addWidget(QLabel("Profile:"), 0, 0)
+        g.addWidget(self.profile_combo, 0, 1)
+        g.addWidget(self.profile_apply, 0, 2)
+        g.addWidget(self.profile_hint, 1, 1, 1, 2)
+        g.addWidget(QLabel("Backend:"), 2, 0)
+        g.addWidget(self.backend_combo, 2, 1)
+        g.addWidget(QLabel("CPU threads:"), 3, 0)
+        g.addWidget(self.threads_spin, 3, 1)
+        g.addWidget(apply_btn, 3, 2)
+        g.addWidget(QLabel("Unload the model when idle:"), 4, 0)
+        g.addWidget(self.unload_combo, 4, 1)
+        lay.addWidget(cfg)
+
+        diag = QGroupBox("Runtime")
+        dv = QVBoxLayout(diag)
+        self.runtime_label = QLabel()
+        self.runtime_label.setWordWrap(True)
+        self.runtime_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        dv.addWidget(self.runtime_label)
+        lay.addWidget(diag)
+        lay.addStretch(1)
+        from PySide6.QtWidgets import QSizePolicy
+
+        for lbl in (self.hw_label, self.profile_hint, self.runtime_label, note):
+            # Let long text wrap instead of widening the page past the window.
+            lbl.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            lbl.setMinimumWidth(200)
+        self._hardware_info = None
+        if self.whisper:
+            self.whisper.backends_changed.connect(self.refresh_hardware)
+            self.whisper.status_changed.connect(lambda _s: self._show_runtime())
+            self.whisper.task_done.connect(self._backend_task_done)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)  # content wraps to the window width
+        scroll.setWidget(page)
+        return scroll
+
+    def refresh_hardware(self) -> None:
+        if self._hardware_info is None:
+            import threading
+
+            from omonflow.hardware.detect import detect
+
+            def work():
+                self._hardware_info = detect()
+                from PySide6.QtCore import QMetaObject
+                QMetaObject.invokeMethod(self, "_hardware_ready", Qt.QueuedConnection)
+
+            threading.Thread(target=work, daemon=True).start()
+            return
+        self._render_hardware()
+
+    @Slot()
+    def _hardware_ready(self) -> None:
+        self._render_hardware()
+
+    def _render_hardware(self) -> None:
+        h = self._hardware_info
+        if h is None or not self.whisper:
+            return
+        gpus = "; ".join(f"{g.name}" + (f", {g.memory_mb // 1024} GB" if g.memory_mb else
+                                         (", unified memory" if g.unified_memory else ""))
+                         + (f" ({', '.join(g.apis)})" if g.apis else "") for g in h.gpus) or "none detected"
+        perf = f", {h.perf_cores} performance" if h.perf_cores else ""
+        self.hw_label.setText(
+            f"<b>{h.os} {h.os_version}</b> ({h.arch})<br>"
+            f"<b>CPU:</b> {h.cpu_model or 'unknown'} — {h.physical_cores or '?'} cores{perf}, "
+            f"{h.logical_cpus} threads<br><b>CPU features:</b> {', '.join(h.cpu_features) or '—'}<br>"
+            f"<b>Memory:</b> {round((h.ram_mb or 0) / 1024)} GB<br><b>GPU:</b> {gpus}"
+            + (f"<br><span style='color:gray'>{'; '.join(h.notes)}</span>" if h.notes else ""))
+        self._render_backends()
+        self._show_recommendation()
+        self._show_runtime()
+
+    def _detected_for(self, family: str) -> str:
+        h = self._hardware_info
+        if family == "cpu":
+            return h.cpu_model or "yes" if h else "yes"
+        if not h:
+            return "?"
+        api = {"metal": "Metal", "cuda": "CUDA", "vulkan": "Vulkan"}.get(family, family)
+        match = [g.name for g in h.gpus if any(a.startswith(api) for a in g.apis)]
+        return ", ".join(match) if match else "no"
+
+    def _render_backends(self) -> None:
+        from omonflow.stt.backends import LABELS
+
+        w = self.whisper
+        snap = w.snapshot()
+        active = (snap.get("backend") or "").lower() if snap.get("state") == "ready" else ""
+        rows = [(d.key, d.family, d.label, True) for d in w.devices]
+        families = {d.family for d in w.devices}
+        for fam in ("metal", "cuda", "vulkan"):  # detected hardware this whisper.cpp build cannot use
+            if fam not in families and self._detected_for(fam) not in ("no", "?"):
+                rows.append((None, fam, LABELS[fam], False))
+        self.backend_table.setRowCount(len(rows))
+        for r, (key, fam, label, available) in enumerate(rows):
+            v = w.validation(key) if key else None
+            val = "—" if v is None else (("✓ " if v.ok else "✗ ") + v.summary)
+            is_active = bool(active) and (active.startswith("cpu") if fam == "cpu" else
+                                          LABELS.get(fam, fam).split()[-1].lower() in active)
+            cells = [label, self._detected_for(fam),
+                     "yes" if available else "no (not in this build)",
+                     val, "● in use" if is_active else ""]
+            for c, text in enumerate(cells):
+                self.backend_table.setItem(r, c, QTableWidgetItem(text))
+            stale = self.backend_table.cellWidget(r, 5)
+            if stale is not None:  # Qt deletes replaced cell widgets only later
+                stale.hide()
+                self.backend_table.removeCellWidget(r, 5)
+            if key:
+                b = QPushButton("Validate")
+                b.setToolTip("Benchmark with the bundled 11 s sample in a separate process")
+                b.clicked.connect(lambda _=False, k=key: self._validate(k))
+                self.backend_table.setCellWidget(r, 5, b)
+        self.backend_table.resizeRowsToContents()
+        self.backend_combo.blockSignals(True)
+        self.backend_combo.clear()
+        self.backend_combo.addItem("Automatic (recommended)", "auto")
+        for d in w.devices:
+            self.backend_combo.addItem(d.label, d.key)
+        self.backend_combo.setCurrentIndex(max(0, self.backend_combo.findData(self.settings.whisper_backend)))
+        self.backend_combo.blockSignals(False)
+
+    def _validate(self, key: str) -> None:
+        self.runtime_label.setText(self.runtime_label.text() + f"<br><i>Validating {key}… (separate process)</i>")
+        self.whisper.validate(key, self.settings.whisper_model)
+
+    def _recommendation(self):
+        from omonflow.stt.profiles import recommend
+
+        h = self._hardware_info
+        return recommend(self.profile_combo.currentData(), h.ram_mb if h else None, self.whisper.devices,
+                         bool(h and any(g.unified_memory for g in h.gpus)))
+
+    def _show_recommendation(self) -> None:
+        if not self.whisper:
+            return
+        rec = self._recommendation()
+        from omonflow.stt.profiles import PROFILES
+
+        desc = PROFILES[self.profile_combo.currentData()].split(": ", 1)[1]
+        if rec is None:
+            self.profile_hint.setText(f"{desc}. Your own choices below are kept as they are.")
+            self.profile_apply.setEnabled(False)
+            return
+        st = self.whisper.store.status(rec.model)
+        dl = "" if st.installed else f" — needs a download of about {(st.size or st.spec.approx_mb * 1e6) / 1e6:,.0f} MB"
+        cur = (self.settings.whisper_model == rec.model and self.settings.whisper_backend == rec.device_key)
+        self.profile_hint.setText(f"<i>{desc}.</i><br>Recommends <b>{rec.model}</b> with backend <b>{rec.device_key}</b>: "
+                                  f"{rec.reason}{dl}." + (" <i>(current settings)</i>" if cur else ""))
+        self.profile_apply.setEnabled(not cur)
+
+    def _apply_profile(self) -> None:
+        rec = self._recommendation()
+        if rec is None:
+            return
+        st = self.whisper.store.status(rec.model)
+        if not st.installed:
+            self._confirm_download(st)  # the profile can be applied once the download has finished
+            return
+        if QMessageBox.question(self, "Apply profile",
+                                f"Switch to {rec.model} on {rec.device_key}?\n\nThe current engine keeps running "
+                                "until the new one has started and passed a quick test.",
+                                QMessageBox.Yes | QMessageBox.Cancel) == QMessageBox.Yes:
+            self.engine_config_requested.emit(rec.model, rec.device_key, self.settings.whisper_threads, rec.profile)
+
+    def _apply_backend(self) -> None:
+        self.engine_config_requested.emit(self.settings.whisper_model, self.backend_combo.currentData(),
+                                          self.threads_spin.value(), "custom")
+
+    def _backend_task_done(self, subject: str, task: str, ok: bool, message: str) -> None:
+        if task == "validate":
+            if not ok:
+                QMessageBox.warning(self, "Backend validation", f"{subject}: {message}")
+            self._render_backends()
+        elif task == "engine" and not ok and self.isVisible():
+            box = QMessageBox(QMessageBox.Warning, "Speech recognition", message + "\n\nThe previous engine "
+                              "is still running with your previous settings.", QMessageBox.Ok, self)
+            cpu = box.addButton("Use CPU instead", QMessageBox.ActionRole)
+            box.exec()
+            if box.clickedButton() is cpu:
+                self.engine_config_requested.emit(self.settings.whisper_model, "cpu", self.settings.whisper_threads,
+                                                  "custom")
+        self._show_runtime()
+
+    def _show_runtime(self) -> None:
+        if not self.whisper:
+            return
+        s = self.whisper.snapshot()
+        lt = s.get("last_transcription")
+        sel = s.get("selected") or {}
+        lines = [
+            f"<b>Selected:</b> model {self.settings.whisper_model}, backend {self.settings.whisper_backend}, "
+            f"threads {self.settings.whisper_threads or 'automatic'}, profile {self.settings.profile}",
+            f"<b>Running:</b> {s.get('state')} — model {Path(s['model']).name if s.get('model') else '—'}, "
+            f"backend {s.get('backend') or '—'} (device setting {sel.get('device', '—')})",
+        ]
+        if lt:
+            lines.append(f"<b>Last transcription ({lt['at']}):</b> {lt['ms']:.0f} ms for {lt['audio_s']:.1f} s of audio"
+                         + (f" = {lt['rtf']:.3f}× real time" if lt.get("rtf") else "")
+                         + f" ({lt['model']}, {lt['backend']})")
+        if s.get("error"):
+            lines.append(f"<span style='color:#c0392b'>{s['error']}</span>")
+        self.runtime_label.setText("<br>".join(lines))
 
     # ------------------------------------------------------------ Dictation
     def _dictation(self) -> QWidget:

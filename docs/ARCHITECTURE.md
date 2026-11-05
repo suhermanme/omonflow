@@ -209,6 +209,12 @@ macOS default: **⌘⇧Space** (registered). ⌘⌥ tap is opt-in under Settings
 - Restart policy: 3 restarts per 5 minutes, exponential backoff.
 - Models live in `<user data>/models` with `.catalog.json` (metadata cache) and `.verified.json`.
 
+**M06 implementation notes:**
+- **Devices:** from whisper.cpp's log (`device N: NAME (type: T)`; types 1/2 are GPUs), selected with `--no-gpu` / `--device N`.
+- **Switching:** candidate server → requested-backend check → self-test with `resources/jfk.wav` → swap. Settings are committed only after success.
+- **Validation:** runs in a separate temporary server, with results stored in `backend-validations.json` per executable, version, device and model.
+- **Idle unload:** reload is triggered when dictation starts, and is also handled inside `transcribe`.
+
 ## 7. Storage, privacy and config
 
 - **Locations:** `platformdirs` user data/config dirs.

@@ -21,8 +21,9 @@ Implements [SPEC.md](SPEC.md) §21.
 | M02 Application foundation | Complete on macOS ([report](M02-report.md)); owner continued to M03 |
 | M03 On-demand audio core | Complete on macOS ([report](M03-report.md)); gate decided: Rust primary |
 | M04 Whisper process manager and models | Complete on macOS ([report](M04-report.md)) |
-| M05 Dictation MVP (macOS) | **Implemented and tested on macOS; owner review requested** ([report](M05-report.md)) |
-| M06–M09 | Not started; M06 awaits approval |
+| M05 Dictation MVP (macOS) | Complete on macOS ([report](M05-report.md)) |
+| M06 Hardware and inference settings | **Implemented and validated on the M4 Pro; other machines pending; owner review requested** ([report](M06-report.md)) |
+| M07–M09 | Not started; M07 awaits approval |
 
 ## Dependencies
 
@@ -182,6 +183,8 @@ tools/validation runs (owner, any time) ─────────────�
 - A failed backend rolls back to the previous working config with an explanation.
 - Profiles never overwrite manual choices.
 
+**M06 inputs:** owner runs `tools/validation` on the i9/RX580 and RTX 3060; Windows swap needs per-process log names (M08).
+
 ## M07 — Text refinement
 
 **Acceptance:**
@@ -238,3 +241,6 @@ tools/validation runs (owner, any time) ─────────────�
 | 2026-11-05 | Insertion "auto" = Accessibility (verified) → paste; typing only on request and only for single lines | M05 design |
 | 2026-11-05 | History on by default (text only, local), with delete-one/delete-all and an off switch | M05 (SPEC §15 lists "disable history") |
 | 2026-11-05 | ⌘⌥ opt-in shortcut moved to M08 (with keyboard hooks for Windows/Linux) | M05 scope |
+| 2026-11-05 | Proceed to M06 | Owner |
+| 2026-11-05 | Engine configuration changes are committed only after the new engine passes start, backend and self-test checks | M06 (SPEC §9.8) |
+| 2026-11-05 | Owner's LLM for M07 testing: OpenAI-compatible server at 192.168.3.243:8080 (model read from /v1/models) | Owner |

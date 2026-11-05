@@ -99,3 +99,18 @@ def test_single_instance_forwards_commands(qapp):
     wait_until(qapp, lambda: got == ["toggle-widget"])
     server.close()
     assert not send_to_running("activate", name=name, timeout_ms=200)
+
+
+def test_engine_settings_saved_only_after_success(make_app):
+    a = make_app()
+    calls = []
+    a.whisper.ensure_running = lambda model, device=None, threads=None: calls.append((model, device, threads))
+    a._engine_config("large-v3-turbo-q5_0", "cuda:0", 4, "accurate")
+    assert calls == [("large-v3-turbo-q5_0", "cuda:0", 4)]
+    a.whisper.task_done.emit("large-v3-turbo-q5_0", "engine", False, "CUDA not available")
+    s = SettingsStore().load()
+    assert (s.whisper_model, s.whisper_backend, s.profile) == ("small", "auto", "balanced")  # unchanged
+    a._engine_config("base", "cpu", 0, "custom")
+    a.whisper.task_done.emit("base", "engine", True, "ready")
+    s = SettingsStore().load()
+    assert (s.whisper_model, s.whisper_backend, s.profile) == ("base", "cpu", "custom")
