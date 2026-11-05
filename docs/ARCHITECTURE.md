@@ -175,6 +175,13 @@ M02 spike decides the macOS and Windows mechanisms (PLAN M02).
 
 Long or multiline text prefers paste.
 
+**M05 implementation notes (macOS):**
+- "auto" = Accessibility insert with read-back verification → paste. "type" = Unicode typing for single lines; multi-line text is always pasted.
+- Frontmost app comes from Accessibility, with a LaunchServices fallback; a final guard runs immediately before injection.
+- Focus restore under macOS 14+ uses `AXFrontmost` + `AXRaise`.
+- The transient clipboard entry carries `org.nspasteboard.TransientType`.
+- History is saved before insertion.
+
 ## 5. Global shortcut (show/hide only)
 
 `ShortcutService` uses pluggable backends. Each one reports **registered / unavailable / permission denied / conflict / not supported**.

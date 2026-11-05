@@ -15,6 +15,8 @@ dependencies = [
     "platformdirs>=4.3",
     "pyobjc-framework-Cocoa>=11; sys_platform == 'darwin'",
     "pyobjc-framework-AVFoundation>=11; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=11; sys_platform == 'darwin'",  # Accessibility API
+    "pyobjc-framework-Quartz>=11; sys_platform == 'darwin'",               # CGEvent (typing, paste)
     # Python audio fallback (and M03 comparison baseline).
     "numpy>=2.2",
     "sounddevice>=0.5",
@@ -27,7 +29,6 @@ omonflow = "omonflow.app.main:main"
 dev = [
     "pytest>=8.3",
     "maturin>=1.16,<2",
-    "pyobjc-framework-Quartz>=11; sys_platform == 'darwin'",
 ]
 package = ["pyinstaller>=6.11"]
 

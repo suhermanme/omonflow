@@ -44,11 +44,28 @@ class Orchestrator(QObject):
     _opened = Signal(int, object)     # (generation, info dict | exception)
     _finalized = Signal(int, object)  # (generation, recording dict | exception)
     _tested = Signal(object)
+    _transcribed = Signal(int, object)  # (generation, text | exception)
+    _inserted = Signal(int, object)     # (generation, InsertResult | exception)
+    _insert_started = Signal(int)
 
     def __init__(self, audio, delays: dict | None = None, ready_timeout_ms: int = 3000,
-                 permission_check=None, parent=None) -> None:
+                 permission_check=None, transcriber=None, inserter=None, history=None,
+                 options=None, parent=None) -> None:
         super().__init__(parent)
         self.audio = audio
+        # transcriber(wav: bytes, timeout_s: float) -> str     (None = M03-style stub)
+        # inserter: omonflow.insertion.base.Inserter            (None = stub, types nothing)
+        # history: callable() -> History | None (None when history is off)
+        # options: callable() -> dict(strategy, restore_clipboard, model)
+        self.transcriber = transcriber
+        self.inserter = inserter
+        self.history = history or (lambda: None)
+        self.options = options or (lambda: {})
+        self.target = None
+        self.last_insert = None
+        self._wav: bytes | None = None  # kept only for Retry after a transcription failure
+        self._insert_lock = threading.Lock()  # cancel vs. "insertion has started" decide atomically
+        self._history_id: int | None = None
         self.delays = {**DEFAULT_DELAYS_MS, **(delays or {})}
         self.ready_timeout_ms = ready_timeout_ms
         self.permission_check = permission_check  # () -> "authorized" | "denied" | ...
@@ -68,6 +85,9 @@ class Orchestrator(QObject):
         self._opened.connect(self._on_opened)
         self._finalized.connect(self._on_finalized)
         self._tested.connect(self._on_tested)
+        self._transcribed.connect(self._on_transcribed)
+        self._inserted.connect(self._on_inserted)
+        self._insert_started.connect(self._on_insert_started)
 
     # ------------------------------------------------------------ properties
     @property
@@ -106,6 +126,12 @@ class Orchestrator(QObject):
             self._fail(f"Microphone error: {exc}", retry=True)
             return False
         self._t_click = time.perf_counter()
+        self.target = None
+        if self.inserter is not None:
+            try:
+                self.target = self.inserter.capture_target()  # the app being dictated into
+            except Exception:  # noqa: BLE001
+                LOG.warning("could not capture the target app", exc_info=True)
         self._fire("start")
         gen = self._gen
 
@@ -127,10 +153,11 @@ class Orchestrator(QObject):
         return True
 
     def cancel(self) -> bool:
-        if not self.can_cancel():
-            return False
-        prev = self.state
-        self._gen += 1  # results of pending work are ignored from now on
+        with self._insert_lock:
+            if not self.can_cancel():
+                return False
+            prev = self.state
+            self._gen += 1  # results of pending work are ignored from now on
         if prev in CAPTURE_STATES:
             self._poll.stop()
             self.level_changed.emit(0.0)
@@ -141,6 +168,7 @@ class Orchestrator(QObject):
             self.error_text = "Insertion cancelled before it started. Text kept, not inserted."
         if prev in (State.FINALIZING, State.TRANSCRIBING) or prev in CAPTURE_STATES:
             self.transcript = None
+            self._wav = None
         self._fire("cancel")
         return True
 
@@ -162,14 +190,22 @@ class Orchestrator(QObject):
         if self.state == State.ERROR:
             self._gen += 1
             self.transcript = None
+            self._wav = None  # kept audio is released
             self.retry_action = None
             self.error_text = ""
             self._fire("dismiss")
 
     def retry(self) -> None:
-        if self.state == State.ERROR and self.retry_action == "start":
+        if self.state != State.ERROR:
+            return
+        if self.retry_action == "start":
             self.dismiss()
             self.start()
+        elif self.retry_action == "transcribe" and self._wav is not None:
+            self.retry_action = None
+            self.error_text = ""
+            self._fire("retry")
+            self._transcribe()
 
     def copy_transcript(self) -> bool:
         if not self.transcript:
@@ -287,29 +323,116 @@ class Orchestrator(QObject):
         self.last_recording = dict(rec, wav_bytes=len(wav))
         LOG.info("recording finalized: %.2f s, trimmed %.0f ms, dropped %s, xruns %s",
                  rec.get("duration_s", 0), rec.get("trimmed_ms", 0), rec.get("dropped"), rec.get("xruns"))
-        del wav  # M03: no transcription yet; audio is not retained
         self._fire("audio_ready")
-        self._later("transcribe", self._on_transcribed)
+        if self.transcriber is None:  # stub (tests / no engine wiring)
+            del wav
+            self._later("transcribe", lambda: self._on_transcribed(self._gen, (
+                f"OmonFlow: captured {rec.get('duration_s', 0):.1f} s of audio (no transcriber configured).")))
+            return
+        self._wav = wav
+        self._transcribe()
 
-    def _on_transcribed(self) -> None:
-        dur = (self.last_recording or {}).get("duration_s", 0.0)
-        self.transcript = (f"OmonFlow M03: captured {dur:.1f} s of audio. "
-                           "Transcription arrives in M04/M05; nothing was typed.")
+    def _transcribe(self) -> None:
+        gen = self._gen
+        wav = self._wav
+        dur = (self.last_recording or {}).get("duration_s", 0.0) or 0.0
+        timeout_s = max(30.0, 3.0 * dur)
+
+        def work():
+            try:
+                text = self.transcriber(wav, timeout_s)
+            except Exception as exc:  # noqa: BLE001
+                text = exc
+            self._transcribed.emit(gen, text)
+
+        threading.Thread(target=work, name="omonflow-transcribe", daemon=True).start()
+
+    def _on_transcribed(self, gen: int, text) -> None:
+        if gen != self._gen or self.state != State.TRANSCRIBING:
+            return
+        if isinstance(text, Exception):
+            # Audio stays in memory so the user can Retry; released on dismiss.
+            self._fail(f"Transcription failed: {text}", retry=True, retry_action="transcribe")
+            return
+        text = clean_transcript(text)
+        heard = (self.last_recording or {}).get("activity", True)
+        if not text or (not heard and is_silence_phrase(text)):
+            self._wav = None
+            self.notice.emit("info", "No speech was recognized; nothing was inserted.")
+            self._fire("no_speech")
+            return
+        self._wav = None  # transcript exists: the audio is no longer needed
+        self.transcript = text
+        opts = self.options()
+        self._history_id = None
+        hist = self.history()
+        if hist is not None:  # saved before insertion, so it survives any insertion failure
+            try:
+                self._history_id = hist.add(text, getattr(self.target, "name", None), "pending",
+                                            (self.last_recording or {}).get("duration_s"), opts.get("model"))
+            except Exception:  # noqa: BLE001
+                LOG.warning("could not save history", exc_info=True)
         self.insertion_started = False
         self._fire("text")
-        self._later("focus_restore", self._on_insert_begin)
+        self._insert(text, opts)
 
-    def _on_insert_begin(self) -> None:
-        self.insertion_started = True  # from here on, cancel is not allowed
-        self.controls_changed.emit()
-        self._later("insert", self._on_inserted)
+    def _insert(self, text: str, opts: dict) -> None:
+        gen = self._gen
+        if self.inserter is None:  # stub: nothing is typed anywhere
+            self._later("focus_restore", lambda: (self._on_insert_started(gen), self._later(
+                "insert", lambda: self._on_inserted(gen, None))))
+            return
 
-    def _on_inserted(self) -> None:
-        # Stub: nothing is typed anywhere before M05.
+        def begin() -> bool:  # called on the insertion thread right before text is injected
+            with self._insert_lock:
+                if gen != self._gen:
+                    return False
+                self.insertion_started = True
+            self._insert_started.emit(gen)
+            return True
+
+        def work():
+            try:
+                res = self.inserter.insert(text, self.target, opts.get("strategy", "auto"),
+                                           opts.get("restore_clipboard", True),
+                                           on_start=begin, cancelled=lambda: gen != self._gen)
+            except Exception as exc:  # noqa: BLE001
+                res = exc
+            self._inserted.emit(gen, res)
+
+        threading.Thread(target=work, name="omonflow-insert", daemon=True).start()
+
+    def _on_insert_started(self, gen: int) -> None:
+        if gen == self._gen and self.state == State.INSERTING:
+            self.insertion_started = True  # from here on, cancel is not allowed
+            self.controls_changed.emit()
+
+    def _on_inserted(self, gen: int, res) -> None:
+        if gen != self._gen or self.state != State.INSERTING:
+            return  # cancelled before insertion started: the transcript is already in ERROR
         self.insertion_started = False
-        self.transcript = None
-        self._fire("inserted")
-        self._later("success_hold", lambda: self._fire("done"))
+        self.last_insert = res
+        outcome = "inserted" if res is None or getattr(res, "ok", False) else (
+            "copied" if getattr(res, "outcome", "") == "copied" else "failed")
+        hist = self.history()
+        if hist is not None and self._history_id is not None:
+            try:
+                hist.set_outcome(self._history_id, outcome)
+            except Exception:  # noqa: BLE001
+                pass
+        if outcome == "inserted":
+            if res is not None and res.verified is False:
+                self.notice.emit("warning", "Inserted, but the app did not show the text. Check it, or copy it "
+                                            "from History.")
+            self.transcript = None
+            self._fire("inserted")
+            self._later("success_hold", lambda: self._fire("done"))
+            return
+        if isinstance(res, Exception):
+            msg = f"Insertion failed: {res}"
+        else:
+            msg = res.error or "The text could not be inserted."
+        self._fail(msg + " Click to copy the text.", retry=False)  # transcript kept for Copy
 
     # ------------------------------------------------------------ helpers
     def _record_startup(self, info: dict | None, error: str | None) -> None:
@@ -328,9 +451,9 @@ class Orchestrator(QObject):
                 "median_ready_ms": round(statistics.median(vals), 1) if vals else None,
                 "max_ready_ms": max(vals) if vals else None}
 
-    def _fail(self, text: str, retry: bool) -> None:
+    def _fail(self, text: str, retry: bool, retry_action: str = "start") -> None:
         self.error_text = text
-        self.retry_action = "start" if retry else None
+        self.retry_action = retry_action if retry else None
         self.notice.emit("error", text)
         if self.sm.can("fail"):
             self._fire("fail")
@@ -352,3 +475,20 @@ class Orchestrator(QObject):
                 fn()
 
         QTimer.singleShot(self.delays[key], self, run)
+
+
+SILENCE_PHRASES = {"thank you.", "thank you", "thanks for watching!", "thanks for watching.", "you", "bye.",
+                   "terima kasih.", "terima kasih", "[blank_audio]", "(silence)", "[silence]", "(music)", "[music]"}
+
+
+def clean_transcript(text: str) -> str:
+    """whisper.cpp markers removed; whitespace normalised."""
+    import re
+
+    text = re.sub(r"\[(BLANK_AUDIO|MUSIC|NOISE|SOUND)\]|\((music|silence|noise)\)", " ", text or "", flags=re.I)
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
+def is_silence_phrase(text: str) -> bool:
+    """Phrases Whisper tends to produce for silence (only applied when no speech activity was detected)."""
+    return text.strip().lower() in SILENCE_PHRASES

@@ -12,7 +12,7 @@ a = Analysis(
     [str(ROOT / "packaging" / "launcher.py")],
     pathex=[str(ROOT / "src")],
     hiddenimports=["omonflow._core", "AppKit", "Foundation", "objc", "AVFoundation", "sounddevice",
-                   "_sounddevice_data", "numpy"],
+                   "_sounddevice_data", "numpy", "ApplicationServices", "Quartz", "sqlite3"],
     excludes=["tkinter", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtWebEngineCore"],
 )
 pyz = PYZ(a.pure)

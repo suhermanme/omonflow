@@ -42,7 +42,7 @@ def setup_logging(level: str) -> None:
 class OmonFlowApp:
     def __init__(self, app: QApplication, store: SettingsStore, server: InstanceServer | None,
                  shortcut_backend=None, audio=None, delays: dict | None = None, whisper=None,
-                 start_engine: bool = True) -> None:
+                 start_engine: bool = True, inserter=None, transcriber=None) -> None:
         self.app = app
         self.store = store
         self.settings = store.load()
@@ -63,19 +63,29 @@ class OmonFlowApp:
             from omonflow.platform.macos.audio import mic_permission
             permission = mic_permission
         self.permission_check = permission
-        self.orch = Orchestrator(self.audio, delays, ready_timeout_ms=self.settings.mic_timeout_ms,
-                                 permission_check=permission)
-        self.widget = FloatingWidget(can_cancel=self.orch.can_cancel,
-                                     always_on_top=self.settings.always_on_top)
-        self.tray = TrayController()
-        self.shortcut = ShortcutService(shortcut_backend) if shortcut_backend else ShortcutService()
         if whisper is None:
             from omonflow.app.whisper_controller import WhisperController
             from omonflow.stt.models import ModelStore
             whisper = WhisperController(ModelStore(data_dir() / "models"), data_dir(), log_dir())
         self.whisper = whisper
+        if inserter is None and start_engine:
+            from omonflow.insertion.base import create_inserter
+            try:
+                inserter = create_inserter()
+            except Exception:  # noqa: BLE001
+                LOG.warning("text insertion unavailable", exc_info=True)
+        self.inserter = inserter
+        self._history = None
+        self.orch = Orchestrator(
+            self.audio, delays, ready_timeout_ms=self.settings.mic_timeout_ms, permission_check=permission,
+            transcriber=transcriber if transcriber is not None else (self._transcribe if start_engine else None),
+            inserter=self.inserter, history=self.history, options=self._options)
+        self.widget = FloatingWidget(can_cancel=self.orch.can_cancel,
+                                     always_on_top=self.settings.always_on_top)
+        self.tray = TrayController()
+        self.shortcut = ShortcutService(shortcut_backend) if shortcut_backend else ShortcutService()
         self.settings_win = SettingsWindow(self.settings, self.diagnostics(), audio_info=self.audio_info,
-                                           whisper=self.whisper)
+                                           whisper=self.whisper, insertion_info=self.insertion_info)
 
         # --- wiring: UI sends intents, orchestrator owns state
         self.widget.intent.connect(self._widget_intent)
@@ -102,6 +112,10 @@ class OmonFlowApp:
         self.settings_win.timeout_changed.connect(self._timeout_changed)
         self.settings_win.mic_test_requested.connect(self._mic_test)
         self.settings_win.model_selected.connect(self._model_selected)
+        self.settings_win.request_accessibility.connect(self._request_accessibility)
+        self.settings_win.open_history.connect(self.show_history)
+        self.settings_win.clear_history.connect(self._clear_history)
+        self.tray.open_history.connect(self.show_history)
         self.whisper.task_done.connect(self._whisper_task_done)
         self.orch.mic_test_progress.connect(self.settings_win.show_test_level)
         self.orch.mic_test_done.connect(self._mic_test_done)
@@ -246,6 +260,53 @@ class OmonFlowApp:
     def _mic_test_done(self, result: dict) -> None:
         self.settings_win.show_test_result(result)
 
+    # ------------------------------------------------------------ dictation pipeline
+    def _transcribe(self, wav: bytes, timeout_s: float) -> str:
+        from omonflow.stt.server import BILINGUAL_PROMPT
+        prompt = BILINGUAL_PROMPT if self.settings.bilingual_prompt else None
+        return self.whisper.transcribe(wav, timeout_s, language=self.settings.language, prompt=prompt)
+
+    def _options(self) -> dict:
+        return {"strategy": self.settings.insertion_strategy, "restore_clipboard": self.settings.restore_clipboard,
+                "model": self.settings.whisper_model}
+
+    def history(self):
+        if not self.settings.history_enabled:
+            return None
+        if self._history is None:
+            from omonflow.storage.history import History
+            self._history = History(data_dir() / "history.sqlite3")
+        return self._history
+
+    def show_history(self) -> None:
+        from omonflow.ui.history import HistoryWindow
+        if getattr(self, "_history_win", None) is None:
+            self._history_win = HistoryWindow(self.history, self.settings)
+        self._history_win.refresh()
+        self._history_win.show()
+        self._history_win.raise_()
+        self._history_win.activateWindow()
+
+    def _clear_history(self) -> None:
+        h = self.history()
+        if h is not None:
+            h.clear()
+        elif (data_dir() / "history.sqlite3").exists():
+            from omonflow.storage.history import History
+            History(data_dir() / "history.sqlite3").clear()
+
+    def insertion_info(self) -> dict:
+        perm = self.inserter.permission() if self.inserter is not None else {"accessibility": None}
+        last = self.orch.last_insert if hasattr(self, "orch") else None
+        return {"adapter": getattr(self.inserter, "name", None), **perm,
+                "last": None if last is None else {"outcome": last.outcome, "method": last.method,
+                                                   "verified": last.verified, "ms": last.ms, "error": last.error,
+                                                   "steps": last.steps}}
+
+    def _request_accessibility(self) -> None:
+        if self.inserter is not None and hasattr(self.inserter, "request_permission"):
+            self.inserter.request_permission()
+
     # ------------------------------------------------------------ speech recognition
     def _model_selected(self, model_id: str) -> None:
         self.settings.whisper_model = model_id
@@ -350,6 +411,8 @@ class OmonFlowApp:
     def dispose(self) -> None:
         """Release everything in a safe order (also used by tests)."""
         self.whisper.shutdown()  # stops only the OmonFlow-owned whisper-server
+        if self._history is not None:
+            self._history.close()
         self.shortcut.shutdown()
         self.orch.shutdown()
         self.widget.timer.stop()

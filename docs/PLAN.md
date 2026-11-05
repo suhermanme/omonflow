@@ -20,8 +20,9 @@ Implements [SPEC.md](SPEC.md) §21.
 | M01 Repository assessment and architecture | Complete (owner continued to M02 on 2026-11-05) |
 | M02 Application foundation | Complete on macOS ([report](M02-report.md)); owner continued to M03 |
 | M03 On-demand audio core | Complete on macOS ([report](M03-report.md)); gate decided: Rust primary |
-| M04 Whisper process manager and models | **Implemented and tested on macOS; owner review requested** ([report](M04-report.md)) |
-| M05–M09 | Not started; M05 awaits approval |
+| M04 Whisper process manager and models | Complete on macOS ([report](M04-report.md)) |
+| M05 Dictation MVP (macOS) | **Implemented and tested on macOS; owner review requested** ([report](M05-report.md)) |
+| M06–M09 | Not started; M06 awaits approval |
 
 ## Dependencies
 
@@ -171,6 +172,8 @@ tools/validation runs (owner, any time) ─────────────�
 - Indonesian/English spoken corpus first-word check reported.
 - Ad-hoc packaged app tested with real permission prompts.
 
+**M05 inputs:** packaged-app permission prompts (owner); real-voice activity tuning; Electron/Chrome/Firefox insertion checks; ⌘⌥ opt-in moved to M08.
+
 ## M06 — Hardware and inference settings
 
 **Acceptance:**
@@ -231,3 +234,7 @@ tools/validation runs (owner, any time) ─────────────�
 | 2026-11-05 | Rust stays the primary audio core; Python fallback kept as labelled degraded mode | Owner ("yes agree") |
 | 2026-11-05 | Proceed to M04 | Owner |
 | 2026-11-05 | Engine starts at launch with the chosen model (default `small`) and stays loaded | M04 (memory vs latency; revisit in M06) |
+| 2026-11-05 | Proceed to M05 | Owner |
+| 2026-11-05 | Insertion "auto" = Accessibility (verified) → paste; typing only on request and only for single lines | M05 design |
+| 2026-11-05 | History on by default (text only, local), with delete-one/delete-all and an off switch | M05 (SPEC §15 lists "disable history") |
+| 2026-11-05 | ⌘⌥ opt-in shortcut moved to M08 (with keyboard hooks for Windows/Linux) | M05 scope |

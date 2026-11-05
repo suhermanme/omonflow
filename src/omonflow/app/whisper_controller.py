@@ -98,6 +98,24 @@ class WhisperController(QObject):
         if self.server:
             self.server.refresh_evidence()
 
+    def transcribe(self, wav: bytes, timeout_s: float, language: str = "auto", prompt: str | None = None) -> str:
+        """Blocking (call from a worker thread). Waits briefly if the engine is still loading."""
+        import time
+
+        deadline = time.monotonic() + 20
+        while True:
+            srv = self.server
+            state = srv.status.state if srv else "stopped"
+            if state == "ready":
+                break
+            if state in ("starting", "loading", "restarting") and time.monotonic() < deadline:
+                time.sleep(0.1)
+                continue
+            snap = self.snapshot()
+            reason = snap.get("error") or f"engine is {state}"
+            raise WhisperError(f"speech recognition is not ready ({reason}). See Settings → Speech Recognition")
+        return srv.transcribe(wav, language=language, prompt=prompt, timeout_s=timeout_s)["text"]
+
     def restart(self, model_id: str) -> None:
         self.stop()
         self.ensure_running(model_id)

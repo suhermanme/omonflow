@@ -58,6 +58,11 @@ class Settings:
     audio_device_name: str | None = None  # also used by the Python fallback
     mic_timeout_ms: int = 3000
     whisper_model: str = "small"
+    language: str = "auto"                # auto | en | id
+    bilingual_prompt: bool = True         # Indonesian–English technical vocabulary hint
+    insertion_strategy: str = "auto"      # auto | paste | type
+    restore_clipboard: bool = True
+    history_enabled: bool = True
 
     @classmethod
     def from_dict(cls, data: dict) -> "Settings":

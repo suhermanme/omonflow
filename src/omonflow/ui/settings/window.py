@@ -46,6 +46,39 @@ def render_preview(key: str, states=(State.IDLE, State.RECORDING, State.TRANSCRI
     return pm.scaled(QSize(400, 90), Qt.KeepAspectRatio, Qt.SmoothTransformation)
 
 
+class SidebarTabs(QWidget):
+    """Sidebar navigation (eight sections do not fit as tabs). Same API subset as QTabWidget."""
+
+    currentChanged = Signal(int)
+
+    def __init__(self) -> None:
+        super().__init__()
+        from PySide6.QtWidgets import QListWidget, QStackedWidget
+
+        self.list = QListWidget()
+        self.list.setFixedWidth(190)
+        self.stack = QStackedWidget()
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.list)
+        lay.addWidget(self.stack, 1)
+        self.list.currentRowChanged.connect(self.stack.setCurrentIndex)
+        self.list.currentRowChanged.connect(self.currentChanged.emit)
+
+    def addTab(self, widget: QWidget, title: str) -> int:  # noqa: N802 (Qt-style API)
+        self.stack.addWidget(widget)
+        self.list.addItem(title.replace("&&", "&"))
+        if self.list.count() == 1:
+            self.list.setCurrentRow(0)
+        return self.list.count() - 1
+
+    def setCurrentIndex(self, i: int) -> None:  # noqa: N802
+        self.list.setCurrentRow(i)
+
+    def currentIndex(self) -> int:  # noqa: N802
+        return self.list.currentRow()
+
+
 class SettingsWindow(QWidget):
     visualizer_selected = Signal(str)
     always_on_top_changed = Signal(bool)
@@ -56,33 +89,48 @@ class SettingsWindow(QWidget):
     timeout_changed = Signal(int)
     mic_test_requested = Signal()
     model_selected = Signal(str)
+    request_accessibility = Signal()
+    open_history = Signal()
+    clear_history = Signal()
 
-    def __init__(self, settings, diagnostics: dict, audio_info=None, whisper=None) -> None:
+    def __init__(self, settings, diagnostics: dict, audio_info=None, whisper=None, insertion_info=None) -> None:
         super().__init__(None, Qt.Window)
         self.settings = settings
         self.setWindowTitle("OmonFlow Settings")
-        self.setMinimumWidth(620)
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self._general(), "General")
-        self.tabs.addTab(self._appearance(), "Appearance")
+        self.setMinimumWidth(820)
+        self.resize(900, 640)
+        self.tabs = SidebarTabs()
         self.audio_info = audio_info
-        self.tabs.addTab(self._audio(), "Audio Input")
         self.whisper = whisper
-        self.tabs.addTab(self._speech(), "Speech Recognition")
+        self.insertion_info = insertion_info
         self.about = QTextBrowser()
         self.about.setOpenExternalLinks(True)
-        self.tabs.addTab(self.about, "About && Diagnostics")
+        self._tab_index: dict[str, int] = {}
+        for key, title, build in [
+            ("general", "General", self._general), ("appearance", "Appearance", self._appearance),
+            ("dictation", "Dictation", self._dictation), ("audio", "Audio Input", self._audio),
+            ("speech", "Speech Recognition", self._speech), ("insertion", "Text Insertion", self._insertion),
+            ("privacy", "Privacy && History", self._privacy), ("about", "About && Diagnostics", lambda: self.about),
+        ]:
+            self._tab_index[key] = self.tabs.addTab(build(), title)
+        self.tabs.currentChanged.connect(self._tab_changed)
         lay = QVBoxLayout(self)
         lay.addWidget(self.tabs)
         self.set_diagnostics(diagnostics)
 
     def show_tab(self, name: str) -> None:
-        self.tabs.setCurrentIndex({"general": 0, "appearance": 1, "audio": 2, "speech": 3, "about": 4}.get(name, 0))
-        if name == "audio":
-            self.refresh_audio()
+        self.tabs.setCurrentIndex(self._tab_index.get(name, 0))
+        self._tab_changed(self.tabs.currentIndex())
         self.show()
         self.raise_()
         self.activateWindow()
+
+    def _tab_changed(self, idx: int) -> None:
+        key = next((k for k, i in self._tab_index.items() if i == idx), None)
+        if key == "audio":
+            self.refresh_audio()
+        elif key == "insertion":
+            self.refresh_insertion()
 
     def closeEvent(self, e) -> None:
         e.ignore()
@@ -547,6 +595,175 @@ class SettingsWindow(QWidget):
         if task != "engine" and not ok:
             QMessageBox.warning(self, "Model", message)
         self.refresh_models()
+
+    # ------------------------------------------------------------ Dictation
+    def _dictation(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        how = QGroupBox("How to dictate")
+        hv = QVBoxLayout(how)
+        t = QLabel("1. Show the widget (shortcut or menu).  2. Click the microphone.  3. Speak when it shows "
+                   "<i>Speak now</i>.  4. Click Stop. The text is typed into the app you were using.<br>"
+                   "Cancel (✕) discards the recording. Nothing is recorded until you click the microphone.")
+        t.setWordWrap(True)
+        hv.addWidget(t)
+        lay.addWidget(how)
+        rec = QGroupBox("Recognition")
+        g = QGridLayout(rec)
+        self.lang_combo = QComboBox()
+        for code, label in (("auto", "Detect automatically (Indonesian or English)"), ("en", "English"),
+                            ("id", "Indonesian (Bahasa Indonesia)")):
+            self.lang_combo.addItem(label, code)
+        self.lang_combo.setCurrentIndex(max(0, self.lang_combo.findData(self.settings.language)))
+        self.lang_combo.currentIndexChanged.connect(self._lang_changed)
+        self.prompt_check = QCheckBox("Help recognition of mixed Indonesian–English and technical words "
+                                      "(GPU, Docker, Linux, …)")
+        self.prompt_check.setChecked(self.settings.bilingual_prompt)
+        self.prompt_check.toggled.connect(self._prompt_changed)
+        g.addWidget(QLabel("Language:"), 0, 0)
+        g.addWidget(self.lang_combo, 0, 1)
+        g.addWidget(self.prompt_check, 1, 0, 1, 2)
+        lay.addWidget(rec)
+        lay.addStretch(1)
+        return page
+
+    def _lang_changed(self) -> None:
+        self.settings.language = self.lang_combo.currentData()
+        self.behavior_changed.emit()
+
+    def _prompt_changed(self, on: bool) -> None:
+        self.settings.bilingual_prompt = on
+        self.behavior_changed.emit()
+
+    # ------------------------------------------------------------ Text Insertion
+    def _insertion(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        perm = QGroupBox("Permission")
+        g = QGridLayout(perm)
+        self.ax_label = QLabel()
+        self.ax_label.setWordWrap(True)
+        ask = QPushButton("Ask macOS for access…")
+        ask.clicked.connect(self.request_accessibility.emit)
+        open_btn = QPushButton("Open Privacy Settings…")
+        open_btn.clicked.connect(self._open_accessibility)
+        g.addWidget(self.ax_label, 0, 0, 1, 3)
+        g.addWidget(ask, 1, 0)
+        g.addWidget(open_btn, 1, 1)
+        for w in (ask, open_btn):
+            w.setVisible(sys.platform == "darwin")
+        lay.addWidget(perm)
+        how = QGroupBox("Method")
+        v = QVBoxLayout(how)
+        self.strategy_group = QButtonGroup(self)
+        options = [("auto", "Automatic (recommended): insert directly where the app supports it, otherwise paste"),
+                   ("paste", "Always paste (via the clipboard)"),
+                   ("type", "Type the text (single lines; multi-line text is pasted)")]
+        for key, text in options:
+            rb = QRadioButton(text)
+            rb.setChecked(self.settings.insertion_strategy == key)
+            rb.toggled.connect(lambda on, k=key: on and self._strategy(k))
+            self.strategy_group.addButton(rb)
+            v.addWidget(rb)
+        self.restore_check = QCheckBox("Restore my clipboard after pasting")
+        self.restore_check.setChecked(self.settings.restore_clipboard)
+        self.restore_check.toggled.connect(self._restore_changed)
+        v.addWidget(self.restore_check)
+        lay.addWidget(how)
+        diag = QGroupBox("Last insertion")
+        dv = QVBoxLayout(diag)
+        self.insert_diag = QLabel("No dictation yet in this session.")
+        self.insert_diag.setWordWrap(True)
+        dv.addWidget(self.insert_diag)
+        note = QLabel("Some apps don't accept typed or pasted text (password fields, apps running as administrator, "
+                      "terminals with Secure Keyboard Entry). When insertion fails, the text is kept: click the "
+                      "widget to copy it, or find it in History.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray")
+        dv.addWidget(note)
+        lay.addWidget(diag)
+        lay.addStretch(1)
+        return page
+
+    def refresh_insertion(self) -> None:
+        if self.insertion_info is None:
+            return
+        info = self.insertion_info()
+        ax = info.get("accessibility")
+        if ax is True:
+            txt = "<span style='color:#2e9d5b'>Accessibility access granted</span> — OmonFlow can insert text."
+        elif ax is False:
+            txt = ("<span style='color:#c0392b'>Accessibility access is off.</span> Without it OmonFlow can only copy "
+                   "the text for you to paste. Turn on OmonFlow in System Settings → Privacy & Security → "
+                   "Accessibility.")
+        else:
+            txt = "Automatic insertion is not available on this platform yet; text is copied for you to paste."
+        if info.get("secure_input"):
+            txt += "<br><b>Secure input is active right now</b> (a password field or secure terminal)."
+        self.ax_label.setText(txt)
+        last = info.get("last")
+        if last:
+            verified = {True: "verified", False: "not visible in the app", None: "not verifiable"}[last["verified"]]
+            self.insert_diag.setText(
+                f"{last['outcome']} via {last['method'] or '—'} ({verified}), {last['ms']:.0f} ms"
+                + (f"<br><span style='color:#c0392b'>{last['error']}</span>" if last.get("error") else ""))
+
+    def _strategy(self, key: str) -> None:
+        self.settings.insertion_strategy = key
+        self.behavior_changed.emit()
+
+    def _restore_changed(self, on: bool) -> None:
+        self.settings.restore_clipboard = on
+        self.behavior_changed.emit()
+
+    def _open_accessibility(self) -> None:
+        from omonflow.platform.macos.insert import ACCESSIBILITY_URL
+
+        QDesktopServices.openUrl(QUrl(ACCESSIBILITY_URL))
+
+    # ------------------------------------------------------------ Privacy & History
+    def _privacy(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        hist = QGroupBox("History")
+        v = QVBoxLayout(hist)
+        self.history_check = QCheckBox("Keep a history of my dictations (text only, on this Mac)")
+        self.history_check.setChecked(self.settings.history_enabled)
+        self.history_check.toggled.connect(self._history_toggled)
+        row = QHBoxLayout()
+        open_btn = QPushButton("Open History…")
+        open_btn.clicked.connect(self.open_history.emit)
+        clear = QPushButton("Delete all history…")
+        clear.clicked.connect(self._confirm_clear)
+        row.addWidget(open_btn)
+        row.addWidget(clear)
+        row.addStretch(1)
+        v.addWidget(self.history_check)
+        v.addLayout(row)
+        lay.addWidget(hist)
+        info = QGroupBox("What OmonFlow stores and sends")
+        iv = QVBoxLayout(info)
+        text = QLabel(
+            "• The microphone is used only between your click on the microphone and Stop.<br>"
+            "• Audio is processed on this computer by whisper.cpp and discarded right after transcription. "
+            "It is kept in memory only while a failed transcription waits for Retry.<br>"
+            "• Nothing is uploaded. There is no telemetry.<br>"
+            "• History stores text only, in your user data folder; you can delete entries or everything.<br>"
+            "• Logs never contain audio or what you said.")
+        text.setWordWrap(True)
+        iv.addWidget(text)
+        lay.addWidget(info)
+        lay.addStretch(1)
+        return page
+
+    def _history_toggled(self, on: bool) -> None:
+        self.settings.history_enabled = on
+        self.behavior_changed.emit()
+
+    def _confirm_clear(self) -> None:
+        if QMessageBox.question(self, "Delete history", "Delete all dictation history? This cannot be undone.",
+                                QMessageBox.Yes | QMessageBox.Cancel) == QMessageBox.Yes:
+            self.clear_history.emit()
 
     # ------------------------------------------------------------ About
     def set_diagnostics(self, d: dict) -> None:

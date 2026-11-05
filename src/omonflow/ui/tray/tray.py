@@ -52,6 +52,7 @@ class TrayController(QObject):
     stop = Signal()
     cancel = Signal()
     quit = Signal()
+    open_history = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -74,8 +75,7 @@ class TrayController(QObject):
         self.stop_action = self._add("Stop Dictation", self.stop.emit)
         self.cancel_action = self._add("Cancel", self.cancel.emit)
         self.menu.addSeparator()
-        history = self._add("History (available in M05)", lambda: None)
-        history.setEnabled(False)
+        self._add("History…", self.open_history.emit)
         self._add("Diagnostics…", lambda: self.open_settings.emit("about"))
         self.menu.addSeparator()
         self._add("Quit OmonFlow", self.quit.emit)
