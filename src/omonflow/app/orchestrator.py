@@ -71,6 +71,7 @@ class Orchestrator(QObject):
         self.permission_check = permission_check  # () -> "authorized" | "denied" | ...
         self.sm = StateMachine()
         self.error_text = ""
+        self.error_label: str | None = None  # short widget label for the error, e.g. "Copied — ⌘V"
         self.transcript: str | None = None  # kept on errors for Copy
         self.retry_action: str | None = None  # "start" after a mic failure
         self.insertion_started = False
@@ -192,6 +193,7 @@ class Orchestrator(QObject):
             self.transcript = None
             self._wav = None  # kept audio is released
             self.retry_action = None
+            self.error_label = None
             self.error_text = ""
             self._fire("dismiss")
 
@@ -432,7 +434,11 @@ class Orchestrator(QObject):
             msg = f"Insertion failed: {res}"
         else:
             msg = res.error or "The text could not be inserted."
-        self._fail(msg + " Click to copy the text.", retry=False)  # transcript kept for Copy
+        if outcome == "copied":
+            # Not a transcription problem: the text is on the clipboard already.
+            self._fail(msg, retry=False, label="Copied — ⌘V")
+            return
+        self._fail(msg + " Click to copy the text.", retry=False, label="Not inserted")  # transcript kept
 
     # ------------------------------------------------------------ helpers
     def _record_startup(self, info: dict | None, error: str | None) -> None:
@@ -451,8 +457,9 @@ class Orchestrator(QObject):
                 "median_ready_ms": round(statistics.median(vals), 1) if vals else None,
                 "max_ready_ms": max(vals) if vals else None}
 
-    def _fail(self, text: str, retry: bool, retry_action: str = "start") -> None:
+    def _fail(self, text: str, retry: bool, retry_action: str = "start", label: str | None = None) -> None:
         self.error_text = text
+        self.error_label = label
         self.retry_action = retry_action if retry else None
         self.notice.emit("error", text)
         if self.sm.can("fail"):

@@ -365,7 +365,8 @@ class OmonFlowApp:
             self.orch.dismiss() if self.orch.state == State.ERROR else self.orch.cancel()
 
     def _state_changed(self, state: str) -> None:
-        self.widget.set_error_payload(bool(self.orch.transcript), self.orch.retry_action is not None)
+        self.widget.set_error_payload(bool(self.orch.transcript), self.orch.retry_action is not None,
+                                      self.orch.error_label)
         self.widget.set_state(state)
         self.tray.set_state(state, self.orch.can_cancel())
         if state == State.ERROR.value and self.orch.error_text:

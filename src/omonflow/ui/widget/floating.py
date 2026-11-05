@@ -40,6 +40,7 @@ class FloatingWidget(QWidget):
         self.level = 0.0
         self.has_transcript = False
         self.audio_kept = False
+        self.label: str | None = None
         self.visualizer = visualizers.create(visualizers.DEFAULT)
         self.active_key = visualizers.DEFAULT
         self._press: tuple[QPointF, str | None] | None = None
@@ -111,8 +112,8 @@ class FloatingWidget(QWidget):
         level = max(0.0, min(float(level), 1.0))
         self.level = max(level, self.level * 0.65)
 
-    def set_error_payload(self, has_transcript: bool, audio_kept: bool) -> None:
-        self.has_transcript, self.audio_kept = has_transcript, audio_kept
+    def set_error_payload(self, has_transcript: bool, audio_kept: bool, label: str | None = None) -> None:
+        self.has_transcript, self.audio_kept, self.label = has_transcript, audio_kept, label
         self.update()
 
     # ------------------------------------------------------------ animation
@@ -148,7 +149,8 @@ class FloatingWidget(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         rect = QRectF(self.rect())
         try:
-            self.visualizer.paint(p, rect, Frame(self.state, self.phase, self.level))
+            label = self.label if self.state == State.ERROR else None
+            self.visualizer.paint(p, rect, Frame(self.state, self.phase, self.level, label))
         except Exception as exc:  # noqa: BLE001
             p.end()
             if self.active_key != visualizers.DEFAULT:

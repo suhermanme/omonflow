@@ -147,6 +147,7 @@ def test_copied_without_permission_is_reported(qapp, tmp_path):
     dictate(qapp, o)
     wait_until(qapp, lambda: o.state == State.ERROR, 5000)
     assert "Accessibility" in o.error_text and o.transcript == "teks"
+    assert o.error_label == "Copied — ⌘V"  # the widget says what happened, not just "Error"
     assert h.list()[0].outcome == "copied"
 
 

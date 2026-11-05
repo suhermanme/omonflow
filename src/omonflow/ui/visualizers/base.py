@@ -50,6 +50,7 @@ class Frame:
     state: State
     phase: float
     level: float  # 0..1, smoothed microphone level
+    label: str | None = None  # overrides the state label (e.g. "Copied — ⌘V")
 
 
 class Visualizer:

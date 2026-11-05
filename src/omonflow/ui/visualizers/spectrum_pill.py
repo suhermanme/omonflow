@@ -78,5 +78,5 @@ class SpectrumPill(Visualizer):
         painter.drawText(
             QRectF(rect.left() + LABEL_X, rect.top(), rect.width() - LABEL_X - 28, rect.height()),
             Qt.AlignVCenter | Qt.AlignLeft,
-            LABELS[frame.state],
+            frame.label or LABELS[frame.state],
         )
