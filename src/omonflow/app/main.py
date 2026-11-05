@@ -154,6 +154,7 @@ class OmonFlowApp:
         self.settings_win.unload_changed.connect(self._unload_changed)
         self.whisper.task_done.connect(self._commit_engine_config)
         self.orch.state_changed.connect(lambda st: st == State.INITIALIZING.value and self.whisper.prepare())
+        self.orch.state_changed.connect(self._ready_cue)
         self._pending_engine: dict | None = None
         self.settings_win.request_accessibility.connect(self._request_accessibility)
         self.settings_win.open_history.connect(self.show_history)
@@ -486,6 +487,16 @@ class OmonFlowApp:
             self._notice("error", f"Could not save settings: {exc}")
 
     # ------------------------------------------------------------ dictation state
+    def _ready_cue(self, state: str) -> None:
+        """Plays the ready sound when capture becomes ready ("Speak now")."""
+        if state == State.CAPTURE_READY.value and self.settings.ready_sound:
+            self.play_ready_sound()
+
+    def play_ready_sound(self) -> None:  # replaced in tests
+        if sys.platform == "darwin":
+            from omonflow.platform.macos.sound import play_ready
+            play_ready()
+
     def _widget_intent(self, name: str) -> None:
         if name == "primary":
             self.orch.primary()

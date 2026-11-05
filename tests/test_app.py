@@ -196,3 +196,22 @@ def test_granted_accessibility_shows_nothing(make_app):
     a.inserter.ok = True
     a.require_accessibility()
     assert a.inserter.asked == 0 and getattr(a, "_ax_box", None) is None
+
+
+# ------------------------------------------------------------------ ready sound
+def test_ready_sound_plays_once_per_dictation_when_enabled(qapp, make_app):
+    a = make_app()
+    played = []
+    a.play_ready_sound = lambda: played.append(a.orch.state)
+    a.orch.start()
+    wait_until(qapp, lambda: a.orch.state in (State.CAPTURE_READY, State.RECORDING))
+    qapp.processEvents()
+    assert played == [State.CAPTURE_READY]
+    a.orch.cancel()
+    a.settings_win.ready_sound_check.setChecked(False)
+    assert a.store.load().ready_sound is False
+    a.orch.start()
+    wait_until(qapp, lambda: a.orch.state in (State.CAPTURE_READY, State.RECORDING))
+    qapp.processEvents()
+    assert played == [State.CAPTURE_READY]  # off: no sound
+    a.orch.cancel()

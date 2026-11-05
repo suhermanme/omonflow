@@ -892,10 +892,20 @@ class SettingsWindow(QWidget):
         how = QGroupBox("How to dictate")
         hv = QVBoxLayout(how)
         t = QLabel("1. Show the widget (shortcut or menu).  2. Click the microphone.  3. Speak when it shows "
-                   "<i>Speak now</i>.  4. Click Stop. The text is typed into the app you were using.<br>"
+                   "<i>Speak now</i> (or after the sound).  4. Click Stop. The text is typed into the app you were "
+                   "using.<br>"
                    "Cancel (✕) discards the recording. Nothing is recorded until you click the microphone.")
         t.setWordWrap(True)
         hv.addWidget(t)
+        self.ready_sound_check = QCheckBox("Play a short sound when OmonFlow is ready for you to speak")
+        self.ready_sound_check.setChecked(self.settings.ready_sound)
+        self.ready_sound_check.toggled.connect(self._ready_sound_changed)
+        rs_note = QLabel("Bluetooth headsets need up to 1.5 s before their microphone works; words spoken before "
+                         "<i>Speak now</i> are not recorded. The sound tells you when to start.")
+        rs_note.setWordWrap(True)
+        rs_note.setStyleSheet("color: gray")
+        hv.addWidget(self.ready_sound_check)
+        hv.addWidget(rs_note)
         lay.addWidget(how)
         rec = QGroupBox("Recognition")
         g = QGridLayout(rec)
@@ -928,6 +938,10 @@ class SettingsWindow(QWidget):
         lay.addWidget(rec)
         lay.addStretch(1)
         return page
+
+    def _ready_sound_changed(self, on: bool) -> None:
+        self.settings.ready_sound = on
+        self.behavior_changed.emit()
 
     def _lang_changed(self) -> None:
         self.settings.language = self.lang_combo.currentData()

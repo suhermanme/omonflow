@@ -57,6 +57,7 @@ class Settings:
     audio_device_id: str | None = None    # Rust core device id (None = system default)
     audio_device_name: str | None = None  # also used by the Python fallback
     mic_timeout_ms: int = 3000
+    ready_sound: bool = True              # short sound when OmonFlow starts listening ("Speak now")
     whisper_model: str = "small"
     whisper_backend: str = "auto"         # "auto" or a backends.Device key (cpu, metal:0, cuda:0, vulkan:1)
     whisper_threads: int = 0              # 0 = automatic
