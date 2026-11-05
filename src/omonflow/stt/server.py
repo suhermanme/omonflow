@@ -40,7 +40,11 @@ VOCAB_PROMPT = ("GPU, VRAM, CPU, Docker, Proxmox, Linux, macOS, server, utilizat
                 "deploy, production, coding, network.")
 BILINGUAL_PROMPT = VOCAB_PROMPT  # backwards-compatible name
 CONFIDENT_LOGPROB = -0.15  # mean token log-prob above which Whisper's language choice is accepted
-TIE_LOGPROB = 0.02         # differences below this are ties (the preferred language wins)
+# The preferred language wins unless another one is clearly more confident.
+# Calibration: a real (accented) English dictation scored en -0.21 vs a
+# translated id -0.186; genuine speech beat its translation by 0.1-0.4 with
+# synthetic voices (M06 notes). 0.10 keeps the first and all of the second.
+PREFER_WINDOW = 0.10
 LANG_CODES = {"english": "en", "indonesian": "id", "malay": "ms", "javanese": "jw", "sundanese": "su",
               "tagalog": "tl", "dutch": "nl", "welsh": "cy", "chinese": "zh", "japanese": "ja", "korean": "ko",
               "arabic": "ar", "spanish": "es", "french": "fr", "german": "de"}
@@ -410,7 +414,9 @@ class WhisperServer:
              (mean token log-probability >= `confident`), use it: one pass.
           2. Otherwise also transcribe in the other allowed language(s) and keep
              the most confident version (a translation scores clearly lower).
-          3. `prefer` only breaks near-ties; it can never force a translation.
+          3. A preferred language is always tried too, and wins unless another
+             is clearly more confident (PREFER_WINDOW): real accented speech can
+             make a translation score almost as high as the true transcript.
         `allowed=()` keeps Whisper's own choice (any language).
         """
         def run(lang: str, fallback: bool) -> tuple[str, float, str | None, float]:
@@ -430,7 +436,8 @@ class WhisperServer:
         text, lp, used, ms = run("auto", True)
         results = {used: (lp, text)}
         total_ms, passes = ms, 1
-        if allowed and not (used in allowed and lp >= confident):
+        want_prefer = prefer in allowed and used != prefer
+        if allowed and (want_prefer or not (used in allowed and lp >= confident)):
             for lang in allowed:
                 if lang not in results:
                     t2, lp2, _, ms2 = run(lang, False)
@@ -439,7 +446,7 @@ class WhisperServer:
                     passes += 1
         candidates = {k: v for k, v in results.items() if not allowed or k in allowed} or results
         chosen = max(candidates, key=lambda k: candidates[k][0])
-        if prefer in candidates and prefer != chosen and candidates[chosen][0] - candidates[prefer][0] < TIE_LOGPROB:
+        if prefer in candidates and prefer != chosen and candidates[chosen][0] - candidates[prefer][0] < PREFER_WINDOW:
             chosen = prefer
         scores = {k: round(v[0], 3) for k, v in results.items()}
         LOG.info("language: whisper=%s chosen=%s logprob=%s passes=%d", used, chosen, scores, passes)  # never text

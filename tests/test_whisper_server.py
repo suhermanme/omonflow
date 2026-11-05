@@ -186,8 +186,10 @@ def test_model_that_crashes_server_restores_previous(fake_exe, tmp_path, model):
     ("id", "en:-0.40,id:-0.03", ("en", "id"), None, "id", 1),    # confident Indonesian: one pass
     ("id", "en:-0.04,id:-0.30", ("en", "id"), None, "en", 2),    # English misheard as Indonesian: fixed
     ("en", "en:-0.35,id:-0.05", ("en", "id"), None, "id", 2),    # Indonesian misheard as English: fixed
-    ("id", "en:-0.20,id:-0.21", ("en", "id"), "en", "en", 2),    # near-tie: the preference decides
-    ("id", "en:-0.60,id:-0.20", ("en", "id"), "en", "id", 2),    # preference never forces a translation
+    ("id", "en:-0.21,id:-0.186", ("en", "id"), "en", "en", 2),   # owner's real voice: translation nearly as confident
+    ("id", "en:-0.12,id:-0.05", ("en", "id"), "en", "en", 2),    # confident "Indonesian", English close: English
+    ("id", "en:-0.39,id:-0.03", ("en", "id"), "en", "id", 2),    # genuine Indonesian beats its translation clearly
+    ("id", "en:-0.21,id:-0.186", ("en", "id"), None, "id", 2),   # without a preference: most confident wins
     ("ms", "en:-0.50,id:-0.10,ms:-0.05", ("en", "id"), None, "id", 3),  # Malay is not one of the user's languages
     ("ms", "ms:-0.05", (), None, "ms", 1),                         # "any language" keeps Whisper's choice
 ])
