@@ -68,3 +68,14 @@ uv run pytest -q                                         # 171 tests (fake serve
 uv run python tools/validation/omonflow_validate.py --whisper-server $(which whisper-server) \
     --model ~/local-ai/whisper.cpp/models/ggml-small.bin
 ```
+
+## Fixes from owner testing (2026-11-05, after the M06 report)
+
+| Owner report | Cause | Fix | Verified |
+|---|---|---|---|
+| "Error transcribing" in the packaged app | Not transcription: the ad-hoc build lacked Accessibility, so text was copied; the widget only said "Error" | Widget says "Copied — ⌘V" / "Not inserted"; docs explain that ad-hoc rebuilds need permissions granted again | Owner |
+| Long dictation into Chrome inserted nothing | Chrome had no text box focused (owner was reading the page); Chrome silently drops the paste and exposes no signal for it | Unverifiable insertions show "Done · click to copy" for 4 s; apps that expose a non-editable focus get the text copied with a clear message | Reproduced and fixed with an isolated Chrome instance |
+| English inserted as (badly translated) Indonesian | Whisper translates when it picks the wrong language; the old hint named Indonesian; on the owner's accented voice the translation scored almost as high as the real text | Neutral vocabulary hint; confidence-based choice between English and Indonesian; optional main language that wins unless the other is clearly better | Owner |
+| Indonesian parts of a mixed dictation translated to English (and, reproduced, dropped) | Whisper decodes a whole window in one language | Auto splits the finished recording at pauses and chooses the language per part (contiguous parts, nothing dropped) | Real-mic test 2/2 and **owner confirmed** |
+
+Cost of per-sentence language choice: two transcription passes per part (Stop → inserted ≈ 1.8 s for 12 s of mixed speech, ≈ 0.3 s for one sentence). Optimising this (e.g. a fast single pass when the language is unambiguous) is left for later.

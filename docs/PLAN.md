@@ -244,3 +244,4 @@ tools/validation runs (owner, any time) ─────────────�
 | 2026-11-05 | Proceed to M06 | Owner |
 | 2026-11-05 | Engine configuration changes are committed only after the new engine passes start, backend and self-test checks | M06 (SPEC §9.8) |
 | 2026-11-05 | Owner's LLM for M07 testing: OpenAI-compatible server at 192.168.3.243:8080 (model read from /v1/models) | Owner |
+| 2026-11-05 | Auto language = English or Indonesian, chosen per sentence; never translate. Owner confirmed with own voice | Owner testing |
