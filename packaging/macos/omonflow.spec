@@ -13,7 +13,11 @@ a = Analysis(
     pathex=[str(ROOT / "src")],
     datas=[(str(ROOT / "src" / "omonflow" / "resources"), "omonflow/resources")],
     hiddenimports=["omonflow._core", "AppKit", "Foundation", "objc", "AVFoundation", "sounddevice",
-                   "_sounddevice_data", "numpy", "ApplicationServices", "Quartz", "sqlite3"],
+                   "_sounddevice_data", "numpy", "ApplicationServices", "Quartz", "sqlite3",
+                   # M07: refinement (imported lazily) and the macOS Keychain backend for API keys
+                   "omonflow.refinement.ai", "omonflow.refinement.clean", "omonflow.refinement.guard",
+                   "omonflow.refinement.refiner", "omonflow.refinement.secrets",
+                   "keyring", "keyring.backends.macOS"],
     excludes=["tkinter", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtWebEngineCore"],
 )
 pyz = PYZ(a.pure)
