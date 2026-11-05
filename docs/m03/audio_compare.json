@@ -1,0 +1,167 @@
+{
+  "machine": "macOS 27.2 arm64 (M4 Pro)",
+  "date": "2026-11-05 19:03",
+  "backends": {
+    "rust": {
+      "lifecycle": {
+        "cycles": 500,
+        "seconds": 120.2,
+        "failures": 0,
+        "timeouts": 0,
+        "failure_examples": [],
+        "stream_leaks": 0,
+        "retired_workers_left": 0,
+        "os_mic_running_after": false,
+        "click_to_ready_ms": {
+          "p50": 68.0,
+          "p95": 73.2,
+          "max": 76.8
+        },
+        "warmup_ms": {
+          "p50": 0.0,
+          "max": 0.0,
+          "nonzero_runs": 0
+        },
+        "stop_to_closed_ms": {
+          "p50": 10.9,
+          "max": 18.2
+        },
+        "finalize_ms": {
+          "p50": 0.9,
+          "max": 2.4
+        },
+        "rss_growth_mb": 5.2
+      },
+      "integrity": [
+        {
+          "load": "none",
+          "seconds": 8.0,
+          "captured_samples": 385024,
+          "expected_samples": 385747,
+          "completeness": 0.9981,
+          "ring_dropped": 0,
+          "overflows_or_xruns": 0,
+          "cpu_percent_one_core": 1.3
+        },
+        {
+          "load": "GIL hog, switch interval 5 ms",
+          "seconds": 8.0,
+          "captured_samples": 386048,
+          "expected_samples": 386419,
+          "completeness": 0.999,
+          "ring_dropped": 0,
+          "overflows_or_xruns": 0,
+          "cpu_percent_one_core": null
+        },
+        {
+          "load": "GIL hog, switch interval 50 ms",
+          "seconds": 8.0,
+          "captured_samples": 390144,
+          "expected_samples": 390859,
+          "completeness": 0.9982,
+          "ring_dropped": 0,
+          "overflows_or_xruns": 0,
+          "cpu_percent_one_core": null
+        },
+        {
+          "load": "GIL hog, switch interval 200 ms",
+          "seconds": 8.0,
+          "captured_samples": 404992,
+          "expected_samples": 405676,
+          "completeness": 0.9983,
+          "ring_dropped": 0,
+          "overflows_or_xruns": 0,
+          "cpu_percent_one_core": null
+        },
+        {
+          "load": "OmonFlow widget animating (circular-wave, 253 frames)",
+          "seconds": 8.0,
+          "captured_samples": 385024,
+          "expected_samples": 385632,
+          "completeness": 0.9984,
+          "ring_dropped": 0,
+          "overflows_or_xruns": 0,
+          "cpu_percent_one_core": null
+        }
+      ]
+    },
+    "python": {
+      "lifecycle": {
+        "cycles": 500,
+        "seconds": 174.5,
+        "failures": 0,
+        "timeouts": 0,
+        "close_timeouts": 0,
+        "failure_examples": [],
+        "stream_leaks": 0,
+        "retired_workers_left": 0,
+        "os_mic_running_after": false,
+        "click_to_ready_ms": {
+          "p50": 63.2,
+          "p95": 73.9,
+          "max": 82.5
+        },
+        "warmup_ms": {
+          "p50": 0.0,
+          "max": 0.0,
+          "nonzero_runs": 0
+        },
+        "stop_to_closed_ms": {
+          "p50": 118.3,
+          "max": 128.7
+        },
+        "finalize_ms": {
+          "p50": 10.5,
+          "max": 12.5
+        },
+        "rss_growth_mb": 8.3
+      },
+      "lifecycle_earlier_run": {
+        "result": "aborted",
+        "detail": "finalize raised 'microphone did not close in time' (PortAudio stop > 3 s); the process then deadlocked in PortAudio FinishStoppingStream / CoreAudio HAL mutex and kept the microphone open until killed"
+      },
+      "integrity": [
+        {
+          "load": "none",
+          "seconds": 8.0,
+          "captured_samples": 385024,
+          "expected_samples": 391185,
+          "completeness": 0.9843,
+          "ring_dropped": 0,
+          "overflows_or_xruns": 0,
+          "cpu_percent_one_core": 3.4
+        },
+        {
+          "load": "GIL hog, switch interval 5 ms",
+          "seconds": 8.0,
+          "captured_samples": 331776,
+          "expected_samples": 392419,
+          "completeness": 0.8455,
+          "ring_dropped": 0,
+          "overflows_or_xruns": 0,
+          "cpu_percent_one_core": null
+        },
+        {
+          "load": "GIL hog, switch interval 50 ms",
+          "result": "hung (killed after 60 s)"
+        },
+        {
+          "load": "GIL hog, switch interval 200 ms",
+          "result": "hung (killed after 60 s)"
+        },
+        {
+          "load": "OmonFlow widget animating (circular-wave, 268 frames)",
+          "seconds": 8.0,
+          "captured_samples": 391168,
+          "expected_samples": 397348,
+          "completeness": 0.9844,
+          "ring_dropped": 0,
+          "overflows_or_xruns": 0,
+          "cpu_percent_one_core": null
+        }
+      ],
+      "notes": "Integrity scenarios run one per process with a 60 s limit (tools/bench/audio_compare.py --scenario). Dry run earlier the same day: 50 ms / 200 ms loads completed but kept only 2.2 % / 1.8 % of the audio."
+    }
+  },
+  "notes": "M4 Pro, built-in microphone, 48 kHz F32. Screen was locked during the UI-load scenario (the widget painted, but may not have been composited)."
+}

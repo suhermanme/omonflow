@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 import omonflow
 from omonflow.app.orchestrator import Orchestrator
 from omonflow.app.single_instance import InstanceServer, send_to_running
-from omonflow.audio.stub import StubAudioBackend
+from omonflow.audio.factory import create_backend
 from omonflow.core.states import ACTIVE_STATES, State
 from omonflow.shortcuts.service import ShortcutService
 from omonflow.storage.settings import SettingsStore, config_dir, log_dir
@@ -52,13 +52,23 @@ class OmonFlowApp:
             from omonflow.platform.macos.window import set_accessory_app
             set_accessory_app()
 
-        self.audio = audio or StubAudioBackend()
-        self.orch = Orchestrator(self.audio, delays)
+        self.audio_fallback_reason = None
+        if audio is None:
+            audio, self.audio_fallback_reason = create_backend()
+            self._apply_device(audio)
+        self.audio = audio
+        permission = None
+        if sys.platform == "darwin":
+            from omonflow.platform.macos.audio import mic_permission
+            permission = mic_permission
+        self.permission_check = permission
+        self.orch = Orchestrator(self.audio, delays, ready_timeout_ms=self.settings.mic_timeout_ms,
+                                 permission_check=permission)
         self.widget = FloatingWidget(can_cancel=self.orch.can_cancel,
                                      always_on_top=self.settings.always_on_top)
         self.tray = TrayController()
         self.shortcut = ShortcutService(shortcut_backend) if shortcut_backend else ShortcutService()
-        self.settings_win = SettingsWindow(self.settings, self.diagnostics())
+        self.settings_win = SettingsWindow(self.settings, self.diagnostics(), audio_info=self.audio_info)
 
         # --- wiring: UI sends intents, orchestrator owns state
         self.widget.intent.connect(self._widget_intent)
@@ -81,6 +91,13 @@ class OmonFlowApp:
         self.settings_win.reset_position.connect(self._reset_position)
         self.settings_win.shortcut_requested.connect(self._apply_shortcut)
         self.settings_win.behavior_changed.connect(self._save)
+        self.settings_win.device_selected.connect(self._device_selected)
+        self.settings_win.timeout_changed.connect(self._timeout_changed)
+        self.settings_win.mic_test_requested.connect(self._mic_test)
+        self.orch.mic_test_progress.connect(self.settings_win.show_test_level)
+        self.orch.mic_test_done.connect(self._mic_test_done)
+        self.orch.startup_recorded.connect(lambda _e: self.settings_win.show_startup_stats(
+            list(self.orch.startup_stats), self.orch.startup_summary()))
         if server is not None:
             server.command.connect(self._remote_command)
 
@@ -94,6 +111,8 @@ class OmonFlowApp:
         else:
             self.tray.set_widget_visible(False)
         LOG.info("diagnostics: %s", self.diagnostics())
+        if self.audio_fallback_reason:
+            self._notice("warning", f"Audio: {self.audio_fallback_reason}")
         if store.recovered_from:
             self._notice("warning", f"Settings were unreadable and have been reset. Backup: {store.recovered_from}")
 
@@ -174,6 +193,47 @@ class OmonFlowApp:
         self._save()
         LOG.info("shortcut changed %s -> %s (%s)", previous, spec, self.shortcut.status.value)
 
+    # ------------------------------------------------------------ audio input
+    def _apply_device(self, audio) -> None:
+        dev = self.settings.audio_device_name if audio.name == "python" else self.settings.audio_device_id
+        try:
+            audio.select_device(dev)
+        except Exception:  # noqa: BLE001
+            LOG.warning("could not select saved microphone %r", dev, exc_info=True)
+
+    def audio_info(self) -> dict:
+        try:
+            devices = self.audio.enumerate_devices()
+        except Exception as exc:  # noqa: BLE001
+            devices, err = [], str(exc)
+        else:
+            err = None
+        perm = self.permission_check() if self.permission_check else None
+        return {"backend": self.audio.name, "degraded": getattr(self.audio, "degraded", False),
+                "fallback_reason": self.audio_fallback_reason, "devices": devices, "error": err,
+                "permission": perm, "selected_id": self.settings.audio_device_id,
+                "selected_name": self.settings.audio_device_name, "timeout_ms": self.settings.mic_timeout_ms}
+
+    def _device_selected(self, device_id, name) -> None:
+        if self.orch.state != State.IDLE or self.orch.testing:
+            self._notice("warning", "Finish the current dictation before changing the microphone.")
+            return
+        self.settings.audio_device_id, self.settings.audio_device_name = device_id, name
+        self._apply_device(self.audio)
+        self._save()
+
+    def _timeout_changed(self, ms: int) -> None:
+        self.settings.mic_timeout_ms = ms
+        self.orch.ready_timeout_ms = ms
+        self._save()
+
+    def _mic_test(self) -> None:
+        if not self.orch.mic_test(3.0):
+            self.settings_win.show_test_result({"ok": False, "error": "Busy: finish the current dictation first."})
+
+    def _mic_test_done(self, result: dict) -> None:
+        self.settings_win.show_test_result(result)
+
     def _shortcut_status(self, status: str, message: str) -> None:
         self.settings_win.show_shortcut_status(status, message)
 
@@ -191,7 +251,7 @@ class OmonFlowApp:
             self.orch.dismiss() if self.orch.state == State.ERROR else self.orch.cancel()
 
     def _state_changed(self, state: str) -> None:
-        self.widget.set_error_payload(bool(self.orch.transcript), self.orch.audio_kept)
+        self.widget.set_error_payload(bool(self.orch.transcript), self.orch.retry_action is not None)
         self.widget.set_state(state)
         self.tray.set_state(state, self.orch.can_cancel())
         if state == State.ERROR.value and self.orch.error_text:
@@ -222,7 +282,8 @@ class OmonFlowApp:
             "Python": sys.version.split()[0],
             "Platform": sys.platform,
             "Native core": core,
-            "Audio backend": f"{self.audio.name} (no microphone access in M02)",
+            "Audio backend": self.audio.name + (" (degraded fallback)" if getattr(self.audio, "degraded", False) else "")
+            + (f": {self.audio_fallback_reason}" if getattr(self, "audio_fallback_reason", None) else ""),
             "Shortcut": f"{self.shortcut.status.value}: {self.shortcut.message}" if hasattr(self, "shortcut") else "",
             "Settings file": str(self.store.path),
             "Logs": str(log_dir()),
@@ -308,7 +369,27 @@ def main(argv: list[str] | None = None) -> int:
     keepalive = QTimer()  # lets Python handle Ctrl-C
     keepalive.start(200)
     keepalive.timeout.connect(lambda: None)
-    return app.exec()
+    code = app.exec()
+    stuck = _audio_stuck(omon.audio)
+    if stuck:
+        # A capture is stuck inside the audio driver (seen with PortAudio on
+        # macOS). Normal interpreter shutdown could block on it and keep the
+        # microphone open; ending the process releases the device.
+        LOG.warning("audio capture still stuck at exit (%s); exiting immediately", stuck)
+        logging.shutdown()
+        os._exit(code)
+    return code
+
+
+def _audio_stuck(audio) -> str | None:
+    try:
+        if audio.stream_open():
+            return "stream still open"
+        if audio.retired_count():
+            return f"{audio.retired_count()} retired capture worker(s)"
+    except Exception as exc:  # noqa: BLE001
+        return f"state unknown: {exc}"
+    return None
 
 
 if __name__ == "__main__":

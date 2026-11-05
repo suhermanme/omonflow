@@ -18,8 +18,9 @@ Implements [SPEC.md](SPEC.md) §21.
 | Milestone | Status |
 |---|---|
 | M01 Repository assessment and architecture | Complete (owner continued to M02 on 2026-11-05) |
-| M02 Application foundation | **Implemented and tested on macOS; owner review requested** ([report](M02-report.md)) |
-| M03–M09 | Not started; M03 awaits approval |
+| M02 Application foundation | Complete on macOS ([report](M02-report.md)); owner continued to M03 |
+| M03 On-demand audio core | **Implemented and tested on macOS; comparison gate decision requested** ([report](M03-report.md)) |
+| M04–M09 | Not started; M04 awaits approval |
 
 ## Dependencies
 
@@ -130,6 +131,8 @@ tools/validation runs (owner, any time) ─────────────�
 7. **Comparison gate report:** Rust vs Python on the metrics in ARCHITECTURE §3.3, including under UI/GIL load. The owner decides whether Rust stays primary.
 8. Device unplug during recording returns the partial audio with a warning.
 
+**M03 inputs to M05:** tune activity thresholds with real speech; physical unplug test; packaged-app mic prompt; USB/Bluetooth startup timing.
+
 ## M04 — Whisper process manager and models
 
 **Scope:**
@@ -221,3 +224,5 @@ tools/validation runs (owner, any time) ─────────────�
 | 2026-11-05 | Proceed to M02 with default prerequisites (MIT, `io.github.suhermanme.omonflow`, local repo, ad-hoc signing) | Owner ("continue") |
 | 2026-11-05 | Idle widget is static (no animation) to meet the < 1 % idle CPU target | M02 measurement |
 | 2026-11-05 | ⌘⌥ opt-in shortcut deferred to M05 | M02 scope |
+| 2026-11-05 | Proceed to M03 | Owner ("continue") |
+| 2026-11-05 | Recommendation: Rust stays the primary audio core; Python fallback kept as labelled degraded mode | M03 measurements; **awaiting owner decision** |

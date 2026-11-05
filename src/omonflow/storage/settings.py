@@ -49,6 +49,9 @@ class Settings:
     always_on_top: bool = True
     widget_pos: list[int] | None = None
     notifications: bool = True
+    audio_device_id: str | None = None    # Rust core device id (None = system default)
+    audio_device_name: str | None = None  # also used by the Python fallback
+    mic_timeout_ms: int = 3000
 
     @classmethod
     def from_dict(cls, data: dict) -> "Settings":

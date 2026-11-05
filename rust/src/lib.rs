@@ -1,7 +1,9 @@
 //! omonflow._core: OmonFlow's native core.
 //!
 //! M02: registered global shortcuts (show/hide widget).
-//! M03: on-demand audio capture will be added here.
+//! M03: on-demand audio capture (audio::py::AudioCore).
+
+pub mod audio;
 
 use std::collections::HashMap;
 use std::str::FromStr;
@@ -102,5 +104,6 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<HotkeyManager>()?;
     m.add("ShortcutConflict", m.py().get_type::<ShortcutConflict>())?;
     m.add("ShortcutUnavailable", m.py().get_type::<ShortcutUnavailable>())?;
+    audio::py::register(m)?;
     Ok(())
 }

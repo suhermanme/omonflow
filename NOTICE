@@ -13,6 +13,10 @@ Code adapted from voice-client
 Third-party components distributed with OmonFlow builds:
   Qt for Python (PySide6, shiboken6)  LGPLv3     https://www.qt.io/qt-for-python
   global-hotkey (Rust crate)          MIT/Apache-2.0
+  cpal, rtrb (Rust crates)            Apache-2.0 / MIT-Apache-2.0
+  sounddevice                         MIT
+  PortAudio                           MIT-style
+  NumPy                               BSD-3-Clause
   PyO3 (Rust crate)                   MIT/Apache-2.0
   platformdirs                        MIT
   PyObjC (macOS builds)               MIT

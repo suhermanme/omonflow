@@ -9,9 +9,11 @@ import sys
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
 from PySide6.QtGui import QImage, QKeySequence, QPainter, QPixmap
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QGridLayout, QGroupBox, QHBoxLayout, QKeySequenceEdit, QLabel,
-    QPushButton, QRadioButton, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QComboBox, QGridLayout, QGroupBox, QHBoxLayout, QKeySequenceEdit, QLabel,
+    QProgressBar, QPushButton, QRadioButton, QSpinBox, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
 import omonflow
@@ -48,8 +50,11 @@ class SettingsWindow(QWidget):
     reset_position = Signal()
     shortcut_requested = Signal(str, bool)  # spec, enabled
     behavior_changed = Signal()             # simple boolean settings changed
+    device_selected = Signal(object, object)  # (device id or None, name or None)
+    timeout_changed = Signal(int)
+    mic_test_requested = Signal()
 
-    def __init__(self, settings, diagnostics: dict) -> None:
+    def __init__(self, settings, diagnostics: dict, audio_info=None) -> None:
         super().__init__(None, Qt.Window)
         self.settings = settings
         self.setWindowTitle("OmonFlow Settings")
@@ -57,6 +62,8 @@ class SettingsWindow(QWidget):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._general(), "General")
         self.tabs.addTab(self._appearance(), "Appearance")
+        self.audio_info = audio_info
+        self.tabs.addTab(self._audio(), "Audio Input")
         self.about = QTextBrowser()
         self.about.setOpenExternalLinks(True)
         self.tabs.addTab(self.about, "About && Diagnostics")
@@ -65,7 +72,9 @@ class SettingsWindow(QWidget):
         self.set_diagnostics(diagnostics)
 
     def show_tab(self, name: str) -> None:
-        self.tabs.setCurrentIndex({"general": 0, "appearance": 1, "about": 2}.get(name, 0))
+        self.tabs.setCurrentIndex({"general": 0, "appearance": 1, "audio": 2, "about": 3}.get(name, 0))
+        if name == "audio":
+            self.refresh_audio()
         self.show()
         self.raise_()
         self.activateWindow()
@@ -201,6 +210,157 @@ class SettingsWindow(QWidget):
 
     def show_visualizer_error(self, text: str) -> None:
         self.vis_error.setText(text)
+
+    # ------------------------------------------------------------ Audio Input
+    def _audio(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        status = QGroupBox("Status")
+        g = QGridLayout(status)
+        self.backend_label = QLabel()
+        self.backend_label.setWordWrap(True)
+        self.perm_label = QLabel()
+        self.perm_button = QPushButton("Open Privacy Settings…")
+        self.perm_button.clicked.connect(self._open_privacy)
+        g.addWidget(QLabel("Audio engine:"), 0, 0)
+        g.addWidget(self.backend_label, 0, 1, 1, 2)
+        g.addWidget(QLabel("Permission:"), 1, 0)
+        g.addWidget(self.perm_label, 1, 1)
+        g.addWidget(self.perm_button, 1, 2)
+        lay.addWidget(status)
+
+        dev = QGroupBox("Microphone")
+        d = QGridLayout(dev)
+        self.device_combo = QComboBox()
+        refresh = QPushButton("Refresh")
+        refresh.clicked.connect(self.refresh_audio)
+        self.device_details = QLabel()
+        self.device_details.setStyleSheet("color: gray")
+        self.timeout_spin = QSpinBox()
+        self.timeout_spin.setRange(1000, 15000)
+        self.timeout_spin.setSingleStep(500)
+        self.timeout_spin.setSuffix(" ms")
+        self.timeout_spin.setValue(self.settings.mic_timeout_ms)
+        self.timeout_spin.valueChanged.connect(self.timeout_changed.emit)
+        d.addWidget(self.device_combo, 0, 0, 1, 2)
+        d.addWidget(refresh, 0, 2)
+        d.addWidget(self.device_details, 1, 0, 1, 3)
+        d.addWidget(QLabel("Give up opening the microphone after:"), 2, 0, 1, 2)
+        d.addWidget(self.timeout_spin, 2, 2)
+        note = QLabel("OmonFlow opens the microphone only when you click the microphone button, and closes it "
+                      "as soon as you stop. Your system's microphone indicator is on exactly while it is open.")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray")
+        d.addWidget(note, 3, 0, 1, 3)
+        self.device_combo.activated.connect(self._device_chosen)
+        lay.addWidget(dev)
+
+        test = QGroupBox("Microphone test")
+        t = QGridLayout(test)
+        self.test_button = QPushButton("Test for 3 seconds")
+        self.test_button.clicked.connect(self._start_test)
+        self.test_level = QProgressBar()
+        self.test_level.setRange(0, 100)
+        self.test_level.setTextVisible(False)
+        self.test_result = QLabel("Speak while the test runs. The audio is discarded immediately.")
+        self.test_result.setWordWrap(True)
+        self.startup_label = QLabel("No microphone starts yet in this session.")
+        self.startup_label.setWordWrap(True)
+        self.startup_label.setStyleSheet("color: gray")
+        t.addWidget(self.test_button, 0, 0)
+        t.addWidget(self.test_level, 0, 1)
+        t.addWidget(self.test_result, 1, 0, 1, 2)
+        t.addWidget(QLabel("<b>Recent microphone starts</b>"), 2, 0, 1, 2)
+        t.addWidget(self.startup_label, 3, 0, 1, 2)
+        lay.addWidget(test)
+        lay.addStretch(1)
+        self.refresh_audio()
+        return page
+
+    def refresh_audio(self) -> None:
+        if self.audio_info is None:
+            return
+        info = self.audio_info()
+        engine = "Native (Rust)" if info["backend"] == "rust" else info["backend"]
+        if info["degraded"]:
+            engine = f"<span style='color:#c0392b'>Python fallback (degraded)</span> — {info['fallback_reason'] or ''}"
+        self.backend_label.setText(engine)
+        perm = info["permission"]
+        texts = {"authorized": "<span style='color:#2e9d5b'>allowed</span>",
+                 "denied": "<span style='color:#c0392b'>denied</span> — turn it on in System Settings",
+                 "restricted": "<span style='color:#c0392b'>restricted by policy</span>",
+                 "not_determined": "not asked yet — macOS asks the first time you dictate"}
+        self.perm_label.setText(texts.get(perm, "managed by the operating system") if perm else
+                                "managed by the operating system")
+        self.perm_button.setVisible(sys.platform == "darwin")
+        self.device_combo.clear()
+        self._devices = info["devices"]
+        self.device_combo.addItem("System default", (None, None))
+        current = 0
+        for i, dev in enumerate(self._devices, start=1):
+            label = dev["name"] + ("  (system default)" if dev.get("is_default") else "")
+            self.device_combo.addItem(label, (dev["id"], dev["name"]))
+            if (dev["id"] == info["selected_id"]) or (info["selected_id"] is None and dev["name"] == info["selected_name"]):
+                current = i
+        if info["selected_id"] and current == 0:
+            self.device_combo.addItem(f"{info['selected_name'] or info['selected_id']} (not connected)",
+                                      (info["selected_id"], info["selected_name"]))
+            current = self.device_combo.count() - 1
+        self.device_combo.setCurrentIndex(current)
+        self._show_device_details()
+        if info["error"]:
+            self.device_details.setText(f"Could not list microphones: {info['error']}")
+
+    def _show_device_details(self) -> None:
+        idx = self.device_combo.currentIndex()
+        if 1 <= idx <= len(self._devices):
+            d = self._devices[idx - 1]
+            self.device_details.setText(f"{d['sample_rate']} Hz · {d['channels']} channel(s) · {d['format']}")
+        else:
+            self.device_details.setText("Follows the system's default input device.")
+
+    def _device_chosen(self, idx: int) -> None:
+        dev_id, name = self.device_combo.itemData(idx)
+        self._show_device_details()
+        self.device_selected.emit(dev_id, name)
+
+    def _open_privacy(self) -> None:
+        from omonflow.platform.macos.audio import PRIVACY_URL
+
+        QDesktopServices.openUrl(QUrl(PRIVACY_URL))
+
+    def _start_test(self) -> None:
+        self.test_button.setEnabled(False)
+        self.test_result.setText("Opening the microphone… speak now.")
+        self.mic_test_requested.emit()
+
+    def show_test_level(self, level: float) -> None:
+        self.test_level.setValue(int(level * 100))
+
+    def show_test_result(self, r: dict) -> None:
+        self.test_button.setEnabled(True)
+        if not r.get("ok"):
+            self.test_result.setText(f"<span style='color:#c0392b'>Test failed:</span> {r.get('error')}")
+            return
+        rec = r.get("recording", {})
+        warn = " <b>Silent input: is the microphone muted?</b>" if r.get("silent_warning") else ""
+        heard = "speech detected" if rec.get("activity") else "no speech detected"
+        self.test_result.setText(
+            f"OK — {r.get('device_name', '')}: ready in {r.get('click_to_ready_ms')} ms "
+            f"(warm-up {r.get('warmup_ms')} ms), peak level {int(r.get('peak_level', 0) * 100)} %, {heard}, "
+            f"{rec.get('duration_s', 0):.1f} s captured, {rec.get('dropped', 0)} samples dropped.{warn}")
+
+    def show_startup_stats(self, entries: list, summary: dict) -> None:
+        lines = []
+        for e in entries[-5:]:
+            if e["ok"]:
+                lines.append(f"{e['time']}  {e.get('device_name', '')}: ready in {e.get('click_to_ready_ms')} ms "
+                             f"(warm-up {e.get('warmup_ms')} ms)")
+            else:
+                lines.append(f"{e['time']}  failed: {e['error']}")
+        lines.append(f"Median {summary['median_ready_ms']} ms, slowest {summary['max_ready_ms']} ms, "
+                     f"{summary['failures']} failure(s) in {summary['runs']} start(s).")
+        self.startup_label.setText("<br>".join(lines))
 
     # ------------------------------------------------------------ About
     def set_diagnostics(self, d: dict) -> None:

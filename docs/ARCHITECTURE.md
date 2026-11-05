@@ -117,7 +117,16 @@ class AudioBackend(Protocol):            # omonflow.core.interfaces
 - Its callback only copies into a bounded queue (no Qt emits).
 - Needs PortAudio: bundled in the macOS and Windows wheels; Linux needs `libportaudio2`.
 
+**M03 implementation notes:**
+- Capture is implemented as specified in §3.1–3.2.
+- Every wait releases the GIL.
+- Cancel runs off the Qt thread.
+- Device ids are cpal `DeviceId` strings for Rust and names for the fallback; both are persisted.
+- At quit, a capture stuck in the driver triggers an immediate process exit so the OS releases the microphone.
+
 ### 3.3 M03 comparison (decides Rust's future)
+
+Result (M03 report): Rust lost no audio under any load; the Python fallback lost 15 % under ordinary GIL load and deadlocked under heavy load. Recommendation: Rust primary.
 
 Both backends are measured on the same machines and devices:
 - Click → CAPTURE_READY: p50, p95 and max.

@@ -1,61 +1,82 @@
 """Orchestrator: owns the dictation state (SPEC §8) and turns UI intents into
 backend actions.
 
-M02 runs a *stub pipeline*: the audio backend is a stub (no microphone),
-transcription and insertion are simulated with timers, and nothing is ever
-typed into another application. M03–M05 replace the stubs.
+M03: real on-demand capture through an AudioBackend (Rust core or Python
+fallback). Opening and finalizing run on worker threads; results come back
+to the Qt thread through signals. Transcription and insertion are still
+stubs (M04/M05): nothing is typed into other apps, and captured audio is
+discarded right after finalize (no retention, SPEC §15).
 """
 
 from __future__ import annotations
 
+import collections
 import logging
+import statistics
+import threading
+import time
 
 from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtGui import QGuiApplication
 
-from omonflow.core.interfaces import AudioBackend, AudioError
+from omonflow.core import interfaces as I
 from omonflow.core.states import CAPTURE_STATES, IllegalTransition, State, StateMachine
 
 LOG = logging.getLogger("omonflow.orchestrator")
 
 DEFAULT_DELAYS_MS = {
-    "init": 250,          # INITIALIZING → CAPTURE_READY
-    "finalize": 150,
-    "transcribe": 700,
+    "transcribe": 600,     # stub until M04/M05
     "focus_restore": 150,  # INSERTING before insertion "starts"
     "insert": 200,
     "success_hold": 1500,
 }
-ACTIVITY_THRESHOLD = 0.25
-ACTIVITY_POLLS = 3
-LEVEL_POLL_MS = 33
+POLL_MS = 33
 
 
 class Orchestrator(QObject):
     state_changed = Signal(str)
     level_changed = Signal(float)
     notice = Signal(str, str)  # (severity, text)
-    controls_changed = Signal()  # e.g. cancel became unavailable within a state
+    controls_changed = Signal()
+    startup_recorded = Signal(dict)
+    mic_test_progress = Signal(float)  # level during a mic test
+    mic_test_done = Signal(dict)
+    _opened = Signal(int, object)     # (generation, info dict | exception)
+    _finalized = Signal(int, object)  # (generation, recording dict | exception)
+    _tested = Signal(object)
 
-    def __init__(self, audio: AudioBackend, delays: dict | None = None, parent=None) -> None:
+    def __init__(self, audio, delays: dict | None = None, ready_timeout_ms: int = 3000,
+                 permission_check=None, parent=None) -> None:
         super().__init__(parent)
         self.audio = audio
         self.delays = {**DEFAULT_DELAYS_MS, **(delays or {})}
+        self.ready_timeout_ms = ready_timeout_ms
+        self.permission_check = permission_check  # () -> "authorized" | "denied" | ...
         self.sm = StateMachine()
         self.error_text = ""
         self.transcript: str | None = None  # kept on errors for Copy
-        self.audio_kept = False  # kept after STT failure for Retry
+        self.retry_action: str | None = None  # "start" after a mic failure
         self.insertion_started = False
-        self._gen = 0  # invalidates pending timers on cancel
-        self._activity_hits = 0
-        self._level_timer = QTimer(self)
-        self._level_timer.setInterval(LEVEL_POLL_MS)
-        self._level_timer.timeout.connect(self._poll_level)
+        self.last_recording: dict | None = None  # metadata only, never audio
+        self.startup_stats: collections.deque = collections.deque(maxlen=50)
+        self.testing = False
+        self._gen = 0
+        self._t_click = 0.0
+        self._poll = QTimer(self)
+        self._poll.setInterval(POLL_MS)
+        self._poll.timeout.connect(self._on_poll)
+        self._opened.connect(self._on_opened)
+        self._finalized.connect(self._on_finalized)
+        self._tested.connect(self._on_tested)
 
     # ------------------------------------------------------------ properties
     @property
     def state(self) -> State:
         return self.sm.state
+
+    @property
+    def audio_kept(self) -> bool:  # widget compatibility: "retry" glyph
+        return self.retry_action is not None
 
     def can_cancel(self) -> bool:
         if self.state == State.INSERTING:
@@ -68,48 +89,62 @@ class Orchestrator(QObject):
         if self.state != State.IDLE:
             LOG.info("start rejected: session already in %s", self.state.value)
             return False
+        if self.testing:
+            self.notice.emit("info", "A microphone test is running.")
+            return False
+        self.retry_action = None
+        perm = self.permission_check() if self.permission_check else "authorized"
+        if perm in ("denied", "restricted"):
+            self._fire("start")
+            self._fail("Microphone access is turned off for OmonFlow. Turn it on in System Settings → "
+                       "Privacy & Security → Microphone.", retry=False)
+            return False
         try:
             self.audio.start_capture()
-        except AudioError as exc:
+        except I.AudioError as exc:
             self._fire("start")
-            self._fail(f"Microphone error: {exc}")
+            self._fail(f"Microphone error: {exc}", retry=True)
             return False
+        self._t_click = time.perf_counter()
         self._fire("start")
-        self._later("init", self._on_ready)
+        gen = self._gen
+
+        def work():
+            try:
+                info = self.audio.wait_until_ready(self.ready_timeout_ms)
+            except Exception as exc:  # noqa: BLE001 - delivered to the Qt thread
+                info = exc
+            self._opened.emit(gen, info)
+
+        threading.Thread(target=work, name="omonflow-open", daemon=True).start()
         return True
 
     def stop(self) -> bool:
         if self.state not in (State.CAPTURE_READY, State.RECORDING):
             return False
         self._fire("stop")
-        self._level_timer.stop()
-        self.audio.stop_capture()
-        self._later("finalize", self._on_finalized)
+        self._finalize()
         return True
 
     def cancel(self) -> bool:
         if not self.can_cancel():
             return False
         prev = self.state
-        self._gen += 1  # drop pending timers
+        self._gen += 1  # results of pending work are ignored from now on
         if prev in CAPTURE_STATES:
-            self._level_timer.stop()
-            self.audio.cancel_capture()
+            self._poll.stop()
             self.level_changed.emit(0.0)
-        elif prev == State.FINALIZING:
-            self.audio.cancel_capture()
+            threading.Thread(target=self.audio.cancel_capture, daemon=True).start()
         if prev == State.REFINING:
             self.error_text = "Refinement cancelled. Raw text kept, not inserted."
         elif prev == State.INSERTING:
             self.error_text = "Insertion cancelled before it started. Text kept, not inserted."
         if prev in (State.FINALIZING, State.TRANSCRIBING) or prev in CAPTURE_STATES:
             self.transcript = None
-            self.audio_kept = False
         self._fire("cancel")
         return True
 
     def primary(self) -> None:
-        """The widget's main button: meaning depends on state."""
         s = self.state
         if s == State.IDLE:
             self.start()
@@ -118,7 +153,7 @@ class Orchestrator(QObject):
         elif s == State.ERROR:
             if self.transcript:
                 self.copy_transcript()
-            elif self.audio_kept:
+            elif self.retry_action:
                 self.retry()
             else:
                 self.dismiss()
@@ -127,15 +162,14 @@ class Orchestrator(QObject):
         if self.state == State.ERROR:
             self._gen += 1
             self.transcript = None
-            self.audio_kept = False
+            self.retry_action = None
             self.error_text = ""
             self._fire("dismiss")
 
     def retry(self) -> None:
-        if self.state == State.ERROR and self.audio_kept:
-            self.audio_kept = False
-            self._fire("retry")
-            self._later("transcribe", self._on_transcribed)
+        if self.state == State.ERROR and self.retry_action == "start":
+            self.dismiss()
+            self.start()
 
     def copy_transcript(self) -> bool:
         if not self.transcript:
@@ -146,39 +180,121 @@ class Orchestrator(QObject):
 
     def shutdown(self) -> None:
         self._gen += 1
-        self._level_timer.stop()
+        self._poll.stop()
         try:
             if self.state in CAPTURE_STATES or self.state == State.FINALIZING:
                 self.audio.cancel_capture()
         finally:
             self.audio.shutdown()
 
-    # ------------------------------------------------------------ pipeline (stub)
-    def _on_ready(self) -> None:
-        info = self.audio.wait_until_ready(3000)
+    # ------------------------------------------------------------ microphone test (Settings)
+    def mic_test(self, seconds: float = 3.0) -> bool:
+        if self.state != State.IDLE or self.testing:
+            return False
+        try:
+            self.audio.start_capture()
+        except I.AudioError as exc:
+            self.mic_test_done.emit({"ok": False, "error": str(exc)})
+            return False
+        self.testing = True
+        t0 = time.perf_counter()
+
+        def work():
+            result: dict = {"ok": True}
+            try:
+                info = self.audio.wait_until_ready(self.ready_timeout_ms)
+                result.update(info, click_to_ready_ms=round((time.perf_counter() - t0) * 1000, 1))
+                peak, end = 0.0, time.monotonic() + seconds
+                while time.monotonic() < end:
+                    lvl = self.audio.get_input_level()
+                    peak = max(peak, lvl)
+                    self.mic_test_progress.emit(lvl)
+                    time.sleep(0.03)
+                self.audio.stop_capture()
+                rec = self.audio.finalize_audio()
+                rec.pop("wav", None)  # discard audio immediately
+                result.update(peak_level=round(peak, 3), recording=rec)
+            except Exception as exc:  # noqa: BLE001
+                self.audio.cancel_capture()
+                result = {"ok": False, "error": str(exc)}
+            self._tested.emit(result)
+
+        threading.Thread(target=work, name="omonflow-mic-test", daemon=True).start()
+        return True
+
+    def _on_tested(self, result: dict) -> None:
+        self.testing = False
+        self.mic_test_progress.emit(0.0)
+        self._record_startup(result if result.get("ok") else None, None if result.get("ok") else result["error"])
+        self.mic_test_done.emit(result)
+
+    # ------------------------------------------------------------ pipeline
+    def _on_opened(self, gen: int, info) -> None:
+        if gen != self._gen or self.state != State.INITIALIZING:
+            return
+        if isinstance(info, Exception):
+            self._record_startup(None, str(info))
+            if isinstance(info, I.DeviceTimeout):
+                msg = (f"Microphone not responding ({info}). Retry, or choose another microphone in "
+                       "Settings → Audio Input.")
+            elif isinstance(info, I.DeviceNotFound):
+                msg = "The selected microphone was not found. Choose another one in Settings → Audio Input."
+            else:
+                msg = f"Could not start the microphone: {info}"
+            self._fail(msg, retry=True)
+            return
+        info = dict(info, click_to_ready_ms=round((time.perf_counter() - self._t_click) * 1000, 1))
+        self._record_startup(info, None)
         self._fire("ready")
         if info.get("silent_warning"):
-            self.notice.emit("warning", "Microphone is delivering silence. Is it muted?")
-        self._activity_hits = 0
-        self._level_timer.start()
+            self.notice.emit("warning", "The microphone is delivering silence. Is it muted?")
+        self._poll.start()
 
-    def _poll_level(self) -> None:
-        level = self.audio.get_input_level()
-        self.level_changed.emit(level)
-        if self.state == State.CAPTURE_READY:
-            # UI-only activity indication (SPEC §6.1). Never affects the audio.
-            self._activity_hits = self._activity_hits + 1 if level > ACTIVITY_THRESHOLD else 0
-            if self._activity_hits >= ACTIVITY_POLLS:
-                self._fire("activity")
+    def _on_poll(self) -> None:
+        self.level_changed.emit(self.audio.get_input_level())
+        for ev in self.audio.poll_events():
+            kind = ev.get("type")
+            if kind == "activity" and self.state == State.CAPTURE_READY:
+                self._fire("activity")  # UI only; never changes the audio
+            elif kind == "device_lost" and self.state in (State.CAPTURE_READY, State.RECORDING):
+                self.notice.emit("warning", "The microphone was disconnected. Keeping what was recorded.")
+                self._fire("device_lost")
+                self._finalize()
+                return
 
-    def _on_finalized(self) -> None:
-        self.audio.finalize_audio()
+    def _finalize(self) -> None:
+        self._poll.stop()
         self.level_changed.emit(0.0)
+        self.audio.stop_capture()
+        gen = self._gen
+
+        def work():
+            try:
+                rec = self.audio.finalize_audio()
+            except Exception as exc:  # noqa: BLE001
+                rec = exc
+            self._finalized.emit(gen, rec)
+
+        threading.Thread(target=work, name="omonflow-finalize", daemon=True).start()
+
+    def _on_finalized(self, gen: int, rec) -> None:
+        if gen != self._gen or self.state != State.FINALIZING:
+            return
+        if isinstance(rec, Exception):
+            self._fail(f"Could not finalize the recording: {rec}", retry=False)
+            return
+        wav = rec.pop("wav", b"")
+        self.last_recording = dict(rec, wav_bytes=len(wav))
+        LOG.info("recording finalized: %.2f s, trimmed %.0f ms, dropped %s, xruns %s",
+                 rec.get("duration_s", 0), rec.get("trimmed_ms", 0), rec.get("dropped"), rec.get("xruns"))
+        del wav  # M03: no transcription yet; audio is not retained
         self._fire("audio_ready")
         self._later("transcribe", self._on_transcribed)
 
     def _on_transcribed(self) -> None:
-        self.transcript = "OmonFlow demo transcript (M02 stub: no audio was captured)."
+        dur = (self.last_recording or {}).get("duration_s", 0.0)
+        self.transcript = (f"OmonFlow M03: captured {dur:.1f} s of audio. "
+                           "Transcription arrives in M04/M05; nothing was typed.")
         self.insertion_started = False
         self._fire("text")
         self._later("focus_restore", self._on_insert_begin)
@@ -189,15 +305,32 @@ class Orchestrator(QObject):
         self._later("insert", self._on_inserted)
 
     def _on_inserted(self) -> None:
-        # Stub: nothing is typed anywhere in M02.
+        # Stub: nothing is typed anywhere before M05.
         self.insertion_started = False
         self.transcript = None
         self._fire("inserted")
         self._later("success_hold", lambda: self._fire("done"))
 
     # ------------------------------------------------------------ helpers
-    def _fail(self, text: str) -> None:
+    def _record_startup(self, info: dict | None, error: str | None) -> None:
+        entry = {"time": time.strftime("%H:%M:%S"), "ok": error is None, "error": error}
+        if info:
+            entry.update({k: info.get(k) for k in ("device_name", "open_ms", "ready_ms", "warmup_ms",
+                                                   "click_to_ready_ms", "silent_warning")})
+        self.startup_stats.append(entry)
+        LOG.info("mic startup: %s", entry)
+        self.startup_recorded.emit(entry)
+
+    def startup_summary(self) -> dict:
+        ok = [e for e in self.startup_stats if e["ok"] and e.get("click_to_ready_ms") is not None]
+        vals = [e["click_to_ready_ms"] for e in ok]
+        return {"runs": len(self.startup_stats), "failures": sum(not e["ok"] for e in self.startup_stats),
+                "median_ready_ms": round(statistics.median(vals), 1) if vals else None,
+                "max_ready_ms": max(vals) if vals else None}
+
+    def _fail(self, text: str, retry: bool) -> None:
         self.error_text = text
+        self.retry_action = "start" if retry else None
         self.notice.emit("error", text)
         if self.sm.can("fail"):
             self._fire("fail")

@@ -14,6 +14,10 @@ dependencies = [
     "PySide6-Essentials>=6.11,<6.12",
     "platformdirs>=4.3",
     "pyobjc-framework-Cocoa>=11; sys_platform == 'darwin'",
+    "pyobjc-framework-AVFoundation>=11; sys_platform == 'darwin'",
+    # Python audio fallback (and M03 comparison baseline).
+    "numpy>=2.2",
+    "sounddevice>=0.5",
 ]
 
 [project.scripts]
@@ -35,6 +39,8 @@ features = ["pyo3/extension-module"]
 
 [tool.uv]
 default-groups = ["dev"]
+# Rebuild the Rust extension whenever its sources change.
+cache-keys = [{ file = "pyproject.toml" }, { file = "rust/Cargo.toml" }, { file = "rust/**/*.rs" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -26,6 +26,10 @@ class SessionActive(AudioError):
     pass
 
 
+class CaptureFailed(AudioError):
+    pass
+
+
 @dataclass
 class DeviceInfo:
     id: str

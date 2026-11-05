@@ -1,4 +1,4 @@
-# PyInstaller spec for the macOS app bundle (M02 packaging smoke test).
+# PyInstaller spec for the macOS app bundle (M02 smoke test; M03 adds audio).
 # Build:  uv run --group package pyinstaller --noconfirm packaging/macos/omonflow.spec
 # Sign:   packaging/macos/sign_adhoc.sh dist/OmonFlow.app
 import sys
@@ -11,7 +11,8 @@ import omonflow  # noqa: E402
 a = Analysis(
     [str(ROOT / "packaging" / "launcher.py")],
     pathex=[str(ROOT / "src")],
-    hiddenimports=["omonflow._core", "AppKit", "Foundation", "objc"],
+    hiddenimports=["omonflow._core", "AppKit", "Foundation", "objc", "AVFoundation", "sounddevice",
+                   "_sounddevice_data", "numpy"],
     excludes=["tkinter", "PySide6.QtQml", "PySide6.QtQuick", "PySide6.QtWebEngineCore"],
 )
 pyz = PYZ(a.pure)
