@@ -23,7 +23,8 @@ Implements [SPEC.md](SPEC.md) §21.
 | M04 Whisper process manager and models | Complete on macOS ([report](M04-report.md)) |
 | M05 Dictation MVP (macOS) | Complete on macOS ([report](M05-report.md)) |
 | M06 Hardware and inference settings | **Implemented and validated on the M4 Pro; other machines pending; owner review requested** ([report](M06-report.md)) |
-| M07–M09 | Not started; M07 awaits approval |
+| M07 Text refinement | **Implemented and tested on macOS with the owner's LLM; owner review requested** ([report](M07-report.md)) |
+| M08–M09 | Not started; M08 awaits approval |
 
 ## Dependencies
 
@@ -245,3 +246,6 @@ tools/validation runs (owner, any time) ─────────────�
 | 2026-11-05 | Engine configuration changes are committed only after the new engine passes start, backend and self-test checks | M06 (SPEC §9.8) |
 | 2026-11-05 | Owner's LLM for M07 testing: OpenAI-compatible server at 192.168.3.243:8080 (model read from /v1/models) | Owner |
 | 2026-11-05 | Auto language = English or Indonesian, chosen per sentence; never translate. Owner confirmed with own voice | Owner testing |
+| 2026-11-05 | Proceed to M07 | Owner |
+| 2026-11-05 | Default refinement = Clean (local rules); no AI server configured by default; AI to a server not on this computer only after the user confirms that address | M07 (SPEC §10, §15) |
+| 2026-11-05 | AI results are accepted only if no word was added, replaced or (except hesitations/repeats) dropped, order and protected tokens unchanged; otherwise Clean text + notice | M07 (small models translated, answered, obeyed) |

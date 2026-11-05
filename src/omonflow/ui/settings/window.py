@@ -15,7 +15,8 @@ from PySide6.QtGui import QDesktopServices
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QFileDialog, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QKeySequenceEdit, QLabel, QMessageBox, QProgressBar, QPushButton, QRadioButton, QSpinBox,
+    QDoubleSpinBox, QHeaderView, QKeySequenceEdit, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QRadioButton, QSpinBox,
     QTableWidget, QTableWidgetItem, QTabWidget, QTextBrowser, QVBoxLayout, QWidget,
 )
 
@@ -25,6 +26,9 @@ from omonflow.shortcuts.service import ShortcutStatus, from_qt, pretty
 from omonflow.storage.settings import default_shortcut
 from omonflow.ui import visualizers
 from omonflow.ui.visualizers.base import Frame
+
+# Sent by the connection test instead of anything the user dictated.
+SAMPLE_SENTENCE = "um so the the server restart is done uh jadi sekarang kita cek log-nya di /var/log/syslog ya"
 
 STATUS_COLORS = {
     ShortcutStatus.REGISTERED.value: "#2e9d5b",
@@ -95,8 +99,10 @@ class SettingsWindow(QWidget):
     request_accessibility = Signal()
     open_history = Signal()
     clear_history = Signal()
+    _ai_result = Signal(str, object)  # (task, result dict) from a worker thread
 
-    def __init__(self, settings, diagnostics: dict, audio_info=None, whisper=None, insertion_info=None) -> None:
+    def __init__(self, settings, diagnostics: dict, audio_info=None, whisper=None, insertion_info=None,
+                 keys=None, ai_config=None) -> None:
         super().__init__(None, Qt.Window)
         self.settings = settings
         self.setWindowTitle("OmonFlow Settings")
@@ -106,12 +112,16 @@ class SettingsWindow(QWidget):
         self.audio_info = audio_info
         self.whisper = whisper
         self.insertion_info = insertion_info
+        self.keys = keys            # refinement.secrets.KeyStore (API keys in the OS keychain)
+        self.ai_config = ai_config  # callable(**overrides) -> AIConfig from the current settings
+        self._ai_result.connect(self._on_ai_result)
         self.about = QTextBrowser()
         self.about.setOpenExternalLinks(True)
         self._tab_index: dict[str, int] = {}
         for key, title, build in [
             ("general", "General", self._general), ("appearance", "Appearance", self._appearance),
-            ("dictation", "Dictation", self._dictation), ("audio", "Audio Input", self._audio),
+            ("dictation", "Dictation", self._dictation), ("refine", "Text Refinement", self._refinement),
+            ("audio", "Audio Input", self._audio),
             ("speech", "Speech Recognition", self._speech), ("hardware", "Hardware & Acceleration", self._hardware),
             ("insertion", "Text Insertion", self._insertion),
             ("privacy", "Privacy && History", self._privacy), ("about", "About && Diagnostics", lambda: self.about),
@@ -137,6 +147,10 @@ class SettingsWindow(QWidget):
             self.refresh_hardware()
         elif key == "insertion":
             self.refresh_insertion()
+        elif key == "refine":
+            self.refresh_refinement()
+        elif key == "privacy":
+            self.refresh_privacy()
 
     def closeEvent(self, e) -> None:
         e.ignore()
@@ -927,6 +941,251 @@ class SettingsWindow(QWidget):
         self.settings.bilingual_prompt = on
         self.behavior_changed.emit()
 
+    # ------------------------------------------------------------ Text Refinement
+    def _refinement(self) -> QWidget:
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        mode = QGroupBox("What happens to the recognized text")
+        mv = QVBoxLayout(mode)
+        self.refine_group = QButtonGroup(self)
+        self.refine_buttons: dict[str, QRadioButton] = {}
+        for key, text in (("raw", "Raw: insert exactly what was recognized"),
+                          ("clean", "Clean (recommended): remove um/uh and accidentally repeated words, on this "
+                                    "computer, instantly"),
+                          ("ai", "AI: an AI server you choose fixes punctuation and filler words (slower)")):
+            rb = QRadioButton(text)
+            rb.setChecked(self.settings.refine_mode == key)
+            rb.toggled.connect(lambda on, k=key: on and self._refine_mode(k))
+            self.refine_group.addButton(rb)
+            self.refine_buttons[key] = rb
+            mv.addWidget(rb)
+        note = QLabel("Your words are never translated or rephrased. If the AI server is unreachable, too slow, or "
+                      "its result changes your wording, numbers or names, the Clean text is inserted instead and you "
+                      "are told why. History keeps the original transcript (\u201cCopy original\u201d).")
+        note.setWordWrap(True)
+        note.setStyleSheet("color: gray")
+        mv.addWidget(note)
+        lay.addWidget(mode)
+
+        srv = QGroupBox("AI server (OpenAI-compatible: Ollama, llama.cpp, LM Studio, …)")
+        g = QGridLayout(srv)
+        self.ai_url = QLineEdit(self.settings.ai_base_url)
+        self.ai_url.setPlaceholderText("e.g. http://localhost:11434/v1 (Ollama) or http://localhost:8080/v1")
+        self.ai_url.editingFinished.connect(self._ai_url_changed)
+        self.ai_key = QLineEdit()
+        self.ai_key.setEchoMode(QLineEdit.Password)
+        self.ai_key.setPlaceholderText("optional")
+        save_key = QPushButton("Save key")
+        save_key.clicked.connect(self._save_ai_key)
+        self.ai_key_status = QLabel()
+        self.ai_key_status.setStyleSheet("color: gray")
+        self.ai_key_status.setWordWrap(True)
+        self.ai_model = QComboBox()
+        self.ai_model.setEditable(True)
+        self.ai_model.lineEdit().setPlaceholderText("first model the server lists")
+        self.ai_model.setEditText(self.settings.ai_model)
+        self.ai_model.lineEdit().editingFinished.connect(self._ai_model_changed)
+        self.ai_model.activated.connect(lambda _i: self._ai_model_changed())
+        load_models = QPushButton("Load list")
+        load_models.clicked.connect(lambda: self._ai_task("models"))
+        self.ai_timeout = QSpinBox()
+        self.ai_timeout.setRange(2, 120)
+        self.ai_timeout.setSuffix(" s")
+        self.ai_timeout.setValue(int(self.settings.ai_timeout_s))
+        self.ai_timeout.valueChanged.connect(self._ai_params_changed)
+        self.ai_temp = QDoubleSpinBox()
+        self.ai_temp.setRange(0.0, 1.0)
+        self.ai_temp.setSingleStep(0.1)
+        self.ai_temp.setValue(float(self.settings.ai_temperature))
+        self.ai_temp.valueChanged.connect(self._ai_params_changed)
+        self.ai_instr = QPlainTextEdit(self.settings.ai_instructions)
+        self.ai_instr.setPlaceholderText("Optional style preferences, e.g. \u201cUse British spelling.\u201d "
+                                         "The rules above always apply.")
+        self.ai_instr.setFixedHeight(54)
+        self.ai_instr.textChanged.connect(self._ai_params_changed)
+        g.addWidget(QLabel("Server address:"), 0, 0)
+        g.addWidget(self.ai_url, 0, 1, 1, 2)
+        g.addWidget(QLabel("API key:"), 1, 0)
+        g.addWidget(self.ai_key, 1, 1)
+        g.addWidget(save_key, 1, 2)
+        g.addWidget(self.ai_key_status, 2, 1, 1, 2)
+        g.addWidget(QLabel("Model:"), 3, 0)
+        g.addWidget(self.ai_model, 3, 1)
+        g.addWidget(load_models, 3, 2)
+        g.addWidget(QLabel("Time limit:"), 4, 0)
+        g.addWidget(self.ai_timeout, 4, 1)
+        g.addWidget(QLabel("Temperature:"), 5, 0)
+        g.addWidget(self.ai_temp, 5, 1)
+        g.addWidget(QLabel("Instructions:"), 6, 0)
+        g.addWidget(self.ai_instr, 6, 1, 1, 2)
+        lay.addWidget(srv)
+
+        priv = QGroupBox("Where your text goes")
+        pv = QVBoxLayout(priv)
+        self.ai_disclosure = QLabel()
+        self.ai_disclosure.setWordWrap(True)
+        self.ai_consent = QCheckBox()
+        self.ai_consent.toggled.connect(self._ai_consent_toggled)
+        pv.addWidget(self.ai_disclosure)
+        pv.addWidget(self.ai_consent)
+        lay.addWidget(priv)
+
+        test = QGroupBox("Connection test")
+        tv = QVBoxLayout(test)
+        row = QHBoxLayout()
+        self.ai_test_btn = QPushButton("Test with a sample sentence")
+        self.ai_test_btn.clicked.connect(lambda: self._ai_task("test"))
+        row.addWidget(self.ai_test_btn)
+        row.addStretch(1)
+        self.ai_test_result = QLabel("The test sends only a built-in sample sentence.")
+        self.ai_test_result.setWordWrap(True)
+        self.ai_test_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        tv.addLayout(row)
+        tv.addWidget(self.ai_test_result)
+        lay.addWidget(test)
+        lay.addStretch(1)
+        self.refresh_refinement()
+        return page
+
+    def _normalized_ai_url(self) -> str:
+        from omonflow.refinement.ai import normalize_base_url
+
+        return normalize_base_url(self.settings.ai_base_url)
+
+    def refresh_refinement(self) -> None:
+        from omonflow.refinement.ai import endpoint_location
+
+        url = self._normalized_ai_url()
+        ai = self.settings.refine_mode == "ai"
+        if not url:
+            loc = None
+            text = "No AI server is set. Raw and Clean work entirely on this computer."
+        else:
+            loc = endpoint_location(url)
+            where = {"local": "a server on <b>this computer</b>",
+                     "network": "<b>another computer on your network</b>",
+                     "internet": "<b>a server on the internet</b>"}[loc]
+            text = (f"With AI selected, the text of each dictation (never audio) is sent to {where}: "
+                    f"<code>{url}</code>. The server's owner can see it.")
+            if loc == "internet":
+                text += " Check that service's privacy policy before using it."
+        self.ai_disclosure.setText(text)
+        needs_consent = bool(url) and loc != "local"
+        self.ai_consent.setVisible(needs_consent)
+        if needs_consent:
+            self.ai_consent.blockSignals(True)
+            self.ai_consent.setText(f"Send my dictated text to {url}")
+            self.ai_consent.setChecked(self.settings.ai_consent_url == url)
+            self.ai_consent.blockSignals(False)
+        self.ai_key_status.setText("Stored in the system keychain, one key per server address. Leave empty and "
+                                   "click Save key to remove it.")
+        if ai and not url:
+            self.ai_test_result.setText("<span style='color:#c0392b'>AI is selected but no server is set: Clean is "
+                                        "used until you set one.</span>")
+        elif ai and needs_consent and self.settings.ai_consent_url != url:
+            self.ai_test_result.setText("<span style='color:#c0392b'>Confirm sending text to this server above; "
+                                        "until then Clean is used.</span>")
+
+    def _refine_mode(self, key: str) -> None:
+        self.settings.refine_mode = key
+        self.behavior_changed.emit()
+        self.refresh_refinement()
+        self.refresh_privacy()
+
+    def _ai_url_changed(self) -> None:
+        url = self.ai_url.text().strip()
+        if url == self.settings.ai_base_url:
+            return
+        self.settings.ai_base_url = url
+        self.behavior_changed.emit()  # consent is tied to the address: a new address must be confirmed again
+        self.refresh_refinement()
+
+    def _ai_model_changed(self) -> None:
+        self.settings.ai_model = self.ai_model.currentText().strip()
+        self.behavior_changed.emit()
+
+    def _ai_params_changed(self) -> None:
+        self.settings.ai_timeout_s = self.ai_timeout.value()
+        self.settings.ai_temperature = round(self.ai_temp.value(), 2)
+        self.settings.ai_instructions = self.ai_instr.toPlainText().strip()
+        self.behavior_changed.emit()
+
+    def _ai_consent_toggled(self, on: bool) -> None:
+        self.settings.ai_consent_url = self._normalized_ai_url() if on else ""
+        self.behavior_changed.emit()
+        self.refresh_refinement()
+        self.refresh_privacy()
+
+    def _save_ai_key(self) -> None:
+        from omonflow.refinement.secrets import SecretError
+
+        self._ai_url_changed()
+        if self.keys is None:
+            return
+        try:
+            key = self.ai_key.text().strip()
+            self.keys.set(self.settings.ai_base_url, key or None)
+        except SecretError as exc:
+            self.ai_key_status.setText(f"<span style='color:#c0392b'>{exc}</span>")
+            return
+        self.ai_key.clear()
+        self.ai_key_status.setText("API key saved in the system keychain." if key else "API key removed.")
+
+    def _ai_task(self, task: str) -> None:
+        """Load the model list or run the sample test on a worker thread."""
+        import threading
+
+        self._ai_url_changed()
+        self._ai_model_changed()
+        if not self._normalized_ai_url() or self.ai_config is None:
+            self.ai_test_result.setText("Set the server address first.")
+            return
+        cfg = self.ai_config()
+        self.ai_test_btn.setEnabled(False)
+        self.ai_test_result.setText("Loading models…" if task == "models" else "Testing…")
+
+        def work():
+            from omonflow.refinement.ai import AIClient, AIError
+            from omonflow.refinement import guard
+            try:
+                client = AIClient(cfg)
+                if task == "models":
+                    res = {"ok": True, "models": client.list_models(min(10.0, cfg.timeout_s))}
+                else:
+                    out, ms = client.refine(SAMPLE_SENTENCE)
+                    v = guard.check(SAMPLE_SENTENCE, out)
+                    res = {"ok": v.ok, "ms": ms, "text": out, "reason": v.reason}
+            except AIError as exc:
+                res = {"ok": False, "error": str(exc)}
+            except Exception as exc:  # noqa: BLE001
+                res = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            self._ai_result.emit(task, res)
+
+        threading.Thread(target=work, name="omonflow-ai-test", daemon=True).start()
+
+    def _on_ai_result(self, task: str, res: dict) -> None:
+        import html
+
+        self.ai_test_btn.setEnabled(True)
+        if "error" in res:
+            self.ai_test_result.setText(f"<span style='color:#c0392b'>{html.escape(res['error'])}</span>")
+            return
+        if task == "models":
+            current = self.ai_model.currentText()
+            self.ai_model.blockSignals(True)
+            self.ai_model.clear()
+            self.ai_model.addItems(res["models"])
+            self.ai_model.setEditText(current)
+            self.ai_model.blockSignals(False)
+            self.ai_test_result.setText(f"{len(res['models'])} model(s) available."
+                                        + ("" if current else " The first one is used unless you choose one."))
+            return
+        color = "#2e9d5b" if res["ok"] else "#c0392b"
+        verdict = "Works" if res["ok"] else f"Answered, but the result would not be used ({html.escape(res['reason'])})"
+        self.ai_test_result.setText(
+            f"<span style='color:{color}'>{verdict}</span> · {res['ms']:.0f} ms<br>"
+            f"Sample: <i>{html.escape(SAMPLE_SENTENCE)}</i><br>Result: <i>{html.escape(res['text'])}</i>")
+
     # ------------------------------------------------------------ Text Insertion
     def _insertion(self) -> QWidget:
         page = QWidget()
@@ -1035,18 +1294,30 @@ class SettingsWindow(QWidget):
         lay.addWidget(hist)
         info = QGroupBox("What OmonFlow stores and sends")
         iv = QVBoxLayout(info)
-        text = QLabel(
-            "• The microphone is used only between your click on the microphone and Stop.<br>"
-            "• Audio is processed on this computer by whisper.cpp and discarded right after transcription. "
-            "It is kept in memory only while a failed transcription waits for Retry.<br>"
-            "• Nothing is uploaded. There is no telemetry.<br>"
-            "• History stores text only, in your user data folder; you can delete entries or everything.<br>"
-            "• Logs never contain audio or what you said.")
+        self.privacy_text = text = QLabel()
         text.setWordWrap(True)
         iv.addWidget(text)
         lay.addWidget(info)
         lay.addStretch(1)
+        self.refresh_privacy()
         return page
+
+    def refresh_privacy(self) -> None:
+        from omonflow.refinement.ai import endpoint_location
+
+        url = self._normalized_ai_url()
+        if self.settings.refine_mode == "ai" and url and endpoint_location(url) != "local":
+            upload = (f"<b>AI refinement is on:</b> the text of each dictation (never audio) is sent to "
+                      f"<code>{url}</code>. Nothing else is uploaded. There is no telemetry.")
+        else:
+            upload = "Nothing is uploaded. There is no telemetry."
+        self.privacy_text.setText((
+            "• The microphone is used only between your click on the microphone and Stop.<br>"
+            "• Audio is processed on this computer by whisper.cpp and discarded right after transcription. "
+            "It is kept in memory only while a failed transcription waits for Retry.<br>"
+            "• {upload}<br>"
+            "• History stores text only, in your user data folder; you can delete entries or everything.<br>"
+            "• Logs never contain audio or what you said.").format(upload=upload))
 
     def _history_toggled(self, on: bool) -> None:
         self.settings.history_enabled = on
@@ -1073,5 +1344,5 @@ The Spectrum Pill, Orb and Circular Wave visualizers are adapted from
 <a href="https://github.com/suhermanme/voice-client">voice-client</a>,
 Copyright (c) 2026 suhermanme, MIT License.<br>
 Qt for Python (PySide6): LGPLv3. global-hotkey: MIT/Apache-2.0. PyO3: MIT/Apache-2.0.
-platformdirs: MIT. PyObjC: MIT.</p>
+platformdirs: MIT. PyObjC: MIT. keyring: MIT.</p>
 """)

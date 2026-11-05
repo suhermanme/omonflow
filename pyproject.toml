@@ -20,6 +20,7 @@ dependencies = [
     # Python audio fallback (and M03 comparison baseline).
     "numpy>=2.2",
     "sounddevice>=0.5",
+    "keyring>=25",
 ]
 
 [project.scripts]

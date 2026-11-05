@@ -56,6 +56,22 @@ RESTART_LIMIT = 3            # restarts allowed ...
 RESTART_WINDOW_S = 300       # ... within this window
 
 
+def segment_text(data: dict) -> str:
+    """The transcript as one line.
+
+    whisper-server joins its segments with line breaks, and a segment can end
+    in the middle of a word ("mas" + "alah" for "masalah"). Segment texts carry
+    Whisper's own word spacing (a new word starts with a space), so they are
+    joined as they are.
+    """
+    segs = data.get("segments")
+    if segs and all("text" in x for x in segs):
+        text = "".join(str(x.get("text") or "") for x in segs)
+    else:
+        text = re.sub(r"\s*\n\s*", " ", str(data.get("text") or ""))
+    return re.sub(r"\s+", " ", text).strip()
+
+
 class WhisperError(Exception):
     pass
 
@@ -388,7 +404,7 @@ class WhisperServer:
 
     def transcribe(self, wav: bytes, language: str = "auto", prompt: str | None = BILINGUAL_PROMPT,
                    timeout_s: float = 120) -> dict:
-        fields = {"language": language, "response_format": "json", "temperature": "0.0"}
+        fields = {"language": language, "response_format": "verbose_json", "temperature": "0.0"}
         if prompt:
             fields.update(prompt=prompt, carry_initial_prompt="true")
         body, ctype = _multipart(fields, {"file": ("audio.wav", wav, "audio/wav")})
@@ -403,7 +419,7 @@ class WhisperServer:
             raise WhisperError(f"transcription failed: {exc}") from exc
         if "error" in data:
             raise WhisperError(f"transcription failed: {data['error']}")
-        return {"text": (data.get("text") or "").strip(), "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
+        return {"text": segment_text(data), "elapsed_ms": round((time.perf_counter() - t0) * 1000, 1)}
 
     def transcribe_auto(self, wav: bytes, allowed: tuple[str, ...] = ("en", "id"), prefer: str | None = None,
                         prompt: str | None = VOCAB_PROMPT, timeout_s: float = 120,
@@ -433,7 +449,7 @@ class WhisperServer:
             n = sum(len(x.get("tokens") or []) for x in segs)
             lp = sum((x.get("avg_logprob") or 0.0) * len(x.get("tokens") or []) for x in segs) / n if n else -9.0
             code = LANG_CODES.get(str(data.get("language", "")).lower(), lang if lang != "auto" else None)
-            return (data.get("text") or "").strip(), lp, code, ms
+            return segment_text(data), lp, code, ms
 
         text, lp, used, ms = run("auto", True)
         results = {used: (lp, text)}
@@ -503,7 +519,7 @@ class WhisperServer:
             segs = data.get("segments") or []
             n = sum(len(x.get("tokens") or []) for x in segs)
             lp = sum((x.get("avg_logprob") or 0.0) * len(x.get("tokens") or []) for x in segs) / n if n else -9.0
-            return lp, (data.get("text") or "").strip(), ms
+            return lp, segment_text(data), ms
 
         first = next((l for l in (prefer, hint) if l in allowed), allowed[0])
         order = [first] + [l for l in allowed if l != first]

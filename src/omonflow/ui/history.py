@@ -37,7 +37,8 @@ class HistoryWindow(QWidget):
             hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         self.table.doubleClicked.connect(self.copy_selected)
         row = QHBoxLayout()
-        for text, slot in (("Copy", self.copy_selected), ("Delete", self.delete_selected), ("Delete all…", self.clear)):
+        for text, slot in (("Copy", self.copy_selected), ("Copy original", self.copy_original),
+                           ("Delete", self.delete_selected), ("Delete all…", self.clear)):
             b = QPushButton(text)
             b.clicked.connect(slot)
             row.addWidget(b)
@@ -58,11 +59,15 @@ class HistoryWindow(QWidget):
         self.status.setText(f"{len(entries)} entr{'y' if len(entries) == 1 else 'ies'} · stored only on this computer")
         self.table.setRowCount(len(entries))
         self._ids = [e.id for e in entries]
-        labels = {"inserted": "inserted", "copied": "copied", "failed": "not inserted", "pending": "—"}
+        labels = {"inserted": "inserted", "copied": "copied", "failed": "not inserted", "pending": "—",
+                  "cancelled": "cancelled"}
         for r, e in enumerate(entries):
             for c, val in enumerate([time.strftime("%Y-%m-%d %H:%M", time.localtime(e.created)), e.text,
                                      e.app or "", labels.get(e.outcome, e.outcome)]):
-                self.table.setItem(r, c, QTableWidgetItem(val))
+                item = QTableWidgetItem(val)
+                if c == 1 and e.raw_text:
+                    item.setToolTip("Refined. Original transcript:\n" + e.raw_text)
+                self.table.setItem(r, c, item)
         self.table.resizeRowsToContents()
 
     def _selected(self) -> list[int]:
@@ -72,6 +77,16 @@ class HistoryWindow(QWidget):
         rows = self._selected()
         if rows:
             QGuiApplication.clipboard().setText("\n".join(self.table.item(r, 1).text() for r in rows))
+
+    def copy_original(self, *_):
+        """The transcript as recognized, before Clean/AI refinement."""
+        h = self.history_provider()
+        rows = self._selected()
+        if h is None or not rows:
+            return
+        by_id = {e.id: e for e in h.list(self.search.text())}
+        QGuiApplication.clipboard().setText("\n".join(
+            (by_id[self._ids[r]].raw_text or by_id[self._ids[r]].text) for r in rows if self._ids[r] in by_id))
 
     def delete_selected(self):
         h = self.history_provider()

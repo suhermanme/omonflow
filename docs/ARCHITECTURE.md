@@ -220,7 +220,8 @@ macOS default: **⌘⇧Space** (registered). ⌘⌥ tap is opt-in under Settings
 - **Locations:** `platformdirs` user data/config dirs.
 - **Settings:** versioned JSON with atomic writes. A corrupt file is backed up and defaults are used, with a notice.
 - **History:** SQLite.
-- **API keys:** OS keychain (`keyring`).
+- **API keys:** OS keychain (`keyring`), one entry per server address (`OmonFlow AI refinement` / normalized URL). Never in settings or logs.
+- **Refinement (M07, `refinement/`):** `clean.py` (fillers, English word repeats; Indonesian reduplication untouched), `ai.py` (OpenAI-compatible client, standard library; few-shot prompt; `enable_thinking: false`, dropped for servers that reject it), `guard.py` (accept an AI rewrite only if words are unchanged apart from punctuation/case, hesitations and repeats; protected tokens exact), `refiner.py` (fallback to Clean with a reason). The orchestrator enters REFINING only for AI; Clean runs inline. History keeps the original transcript in `raw_text`.
 - **Logs:** structured; never contain audio or transcript content unless the user enables debug content logging.
 
 ## 8. Packaging and signing

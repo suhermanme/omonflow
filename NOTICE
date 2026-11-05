@@ -23,4 +23,5 @@ Third-party components distributed with OmonFlow builds:
   PyO3 (Rust crate)                   MIT/Apache-2.0
   platformdirs                        MIT
   PyObjC (macOS builds)               MIT
+  keyring, jaraco.*, more-itertools   MIT
 A complete third-party license file is generated at packaging time (M09).

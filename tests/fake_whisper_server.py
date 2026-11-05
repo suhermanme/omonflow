@@ -95,7 +95,9 @@ class H(BaseHTTPRequestHandler):
             text = f" And so, ask not what your country can do for you. [{os.path.basename(state['model'])}] [lang={used}] "
             if field(body, "response_format") == "verbose_json":
                 self._json(200, {"text": text, "language": names.get(used, used),
-                                 "segments": [{"tokens": [1] * 10, "avg_logprob": lps.get(used, -1.0)}]})
+                                 "segments": [{"text": text[:40], "tokens": [1] * 5, "avg_logprob": lps.get(used, -1.0)},
+                                              {"text": text[40:], "tokens": [1] * 5,
+                                               "avg_logprob": lps.get(used, -1.0)}]})
             else:
                 self._json(200, {"text": text})
         else:

@@ -114,3 +114,47 @@ def test_engine_settings_saved_only_after_success(make_app):
     a.whisper.task_done.emit("base", "engine", True, "ready")
     s = SettingsStore().load()
     assert (s.whisper_model, s.whisper_backend, s.profile) == ("base", "cpu", "custom")
+
+
+# ------------------------------------------------------------------ refinement settings (M07)
+def test_ai_needs_a_server_and_confirmation_for_other_computers(make_app):
+    a = make_app()
+    ref, win = a.orch.refiner, a.settings_win
+    assert a.settings.refine_mode == "clean" and a.settings.ai_base_url == ""  # no AI server by default
+    win.refine_buttons["ai"].setChecked(True)
+    assert ref.mode() == "clean"                       # no server yet
+    win.ai_url.setText("192.168.3.243:8080")
+    win._ai_url_changed()
+    assert not win.ai_consent.isHidden() and "another computer on your network" in win.ai_disclosure.text()
+    assert ref.mode() == "clean"                       # not confirmed
+    win.ai_consent.setChecked(True)
+    assert a.settings.ai_consent_url == "http://192.168.3.243:8080/v1" and ref.mode() == "ai"
+    win.refresh_privacy()
+    assert "192.168.3.243" in win.privacy_text.text()  # Privacy page says where text goes
+    win.ai_url.setText("http://10.1.1.1:8080")        # a new address needs a new confirmation
+    win._ai_url_changed()
+    assert ref.mode() == "clean" and not win.ai_consent.isChecked()
+    a2 = make_app()                                    # settings persisted
+    assert (a2.settings.refine_mode, a2.settings.ai_base_url) == ("ai", "http://10.1.1.1:8080")
+
+
+def test_local_ai_server_needs_no_confirmation(make_app):
+    a = make_app()
+    a.settings_win.refine_buttons["ai"].setChecked(True)
+    a.settings_win.ai_url.setText("http://localhost:11434")
+    a.settings_win._ai_url_changed()
+    assert a.settings_win.ai_consent.isHidden()
+    assert "this computer" in a.settings_win.ai_disclosure.text() and a.orch.refiner.mode() == "ai"
+
+
+def test_settings_never_contain_the_api_key(make_app, config_dir):
+    from test_refinement import MemoryKeyring
+    from omonflow.refinement.secrets import KeyStore
+    a = make_app()
+    a.keys = a.settings_win.keys = KeyStore(MemoryKeyring())
+    a.settings_win.ai_url.setText("http://localhost:8080")
+    a.settings_win.ai_key.setText("sk-very-secret")
+    a.settings_win._save_ai_key()
+    assert a.keys.get("http://localhost:8080") == "sk-very-secret"
+    assert a.ai_config().api_key == "sk-very-secret"
+    assert "sk-very-secret" not in a.store.path.read_text()

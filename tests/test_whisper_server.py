@@ -218,3 +218,13 @@ def test_logs_never_contain_the_text(fake_exe, tmp_path, model, caplog):
         assert not any("ask not" in r.getMessage() for r in caplog.records)
     finally:
         s.stop()
+
+
+def test_segments_are_joined_without_breaking_words():
+    from omonflow.stt.server import segment_text
+    # real whisper-server output: a segment ended inside "masalah"
+    data = {"text": " Eh, tolong cek dulu, kayaknya ada mas\nalah di network ya.\n",
+            "segments": [{"text": " Eh, tolong cek dulu, kayaknya ada mas"}, {"text": "alah di network ya."}]}
+    assert segment_text(data) == "Eh, tolong cek dulu, kayaknya ada masalah di network ya."
+    assert segment_text({"text": " First line.\n Second line.\n"}) == "First line. Second line."
+    assert segment_text({"text": " Hi.", "segments": [{"tokens": [1]}]}) == "Hi."

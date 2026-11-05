@@ -1,11 +1,11 @@
 """Orchestrator: owns the dictation state (SPEC §8) and turns UI intents into
 backend actions.
 
-M03: real on-demand capture through an AudioBackend (Rust core or Python
-fallback). Opening and finalizing run on worker threads; results come back
-to the Qt thread through signals. Transcription and insertion are still
-stubs (M04/M05): nothing is typed into other apps, and captured audio is
-discarded right after finalize (no retention, SPEC §15).
+Pipeline: on-demand capture (Rust core or Python fallback) → transcription →
+optional refinement (Raw / Clean / AI, M07) → insertion into the app the user
+was dictating into. Slow steps run on worker threads; results come back to the
+Qt thread through signals, tagged with a generation so a cancel wins. Audio is
+discarded once there is a transcript; the transcript is never lost.
 """
 
 from __future__ import annotations
@@ -47,21 +47,27 @@ class Orchestrator(QObject):
     _tested = Signal(object)
     _transcribed = Signal(int, object)  # (generation, text | exception)
     _inserted = Signal(int, object)     # (generation, InsertResult | exception)
+    _refined = Signal(int, object)      # (generation, RefineResult)
     _insert_started = Signal(int)
 
     def __init__(self, audio, delays: dict | None = None, ready_timeout_ms: int = 3000,
                  permission_check=None, transcriber=None, inserter=None, history=None,
-                 options=None, parent=None) -> None:
+                 options=None, refiner=None, parent=None) -> None:
         super().__init__(parent)
         self.audio = audio
         # transcriber(wav: bytes, timeout_s: float) -> str     (None = M03-style stub)
         # inserter: omonflow.insertion.base.Inserter            (None = stub, types nothing)
         # history: callable() -> History | None (None when history is off)
         # options: callable() -> dict(strategy, restore_clipboard, model)
+        # refiner: object with mode() -> "raw" | "clean" | "ai" and refine(text, mode) -> RefineResult
+        #          (blocking for "ai"; None = insert the transcript as is)
         self.transcriber = transcriber
         self.inserter = inserter
         self.history = history or (lambda: None)
         self.options = options or (lambda: {})
+        self.refiner = refiner
+        self.last_refine = None  # RefineResult of the last dictation (diagnostics; no text logged)
+        self._raw_text: str | None = None
         self.target = None
         self.last_insert = None
         self._wav: bytes | None = None  # kept only for Retry after a transcription failure
@@ -90,6 +96,7 @@ class Orchestrator(QObject):
         self._tested.connect(self._on_tested)
         self._transcribed.connect(self._on_transcribed)
         self._inserted.connect(self._on_inserted)
+        self._refined.connect(self._on_refined)
         self._insert_started.connect(self._on_insert_started)
 
     # ------------------------------------------------------------ properties
@@ -166,9 +173,12 @@ class Orchestrator(QObject):
             self.level_changed.emit(0.0)
             threading.Thread(target=self.audio.cancel_capture, daemon=True).start()
         if prev == State.REFINING:
+            self.transcript = self._raw_text  # SPEC §5.3: the raw transcript is kept
             self.error_text = "Refinement cancelled. Raw text kept, not inserted."
         elif prev == State.INSERTING:
             self.error_text = "Insertion cancelled before it started. Text kept, not inserted."
+        if prev in (State.REFINING, State.INSERTING):
+            self._history_outcome("cancelled")
         if prev in (State.FINALIZING, State.TRANSCRIBING) or prev in CAPTURE_STATES:
             self.transcript = None
             self._wav = None
@@ -368,19 +378,78 @@ class Orchestrator(QObject):
             self._fire("no_speech")
             return
         self._wav = None  # transcript exists: the audio is no longer needed
-        self.transcript = text
-        opts = self.options()
+        self.transcript = self._raw_text = text
         self._history_id = None
         hist = self.history()
-        if hist is not None:  # saved before insertion, so it survives any insertion failure
+        if hist is not None:  # saved before refinement/insertion, so it survives any failure
             try:
                 self._history_id = hist.add(text, getattr(self.target, "name", None), "pending",
-                                            (self.last_recording or {}).get("duration_s"), opts.get("model"))
+                                            (self.last_recording or {}).get("duration_s"),
+                                            self.options().get("model"))
             except Exception:  # noqa: BLE001
                 LOG.warning("could not save history", exc_info=True)
         self.insertion_started = False
+        self.last_refine = None
+        mode = "raw"
+        if self.refiner is not None:
+            try:
+                mode = self.refiner.mode()
+            except Exception:  # noqa: BLE001
+                LOG.warning("refinement mode unavailable", exc_info=True)
+        if mode == "ai":
+            self._fire("text_refine")
+            gen = self._gen
+            refine = self.refiner.refine
+
+            def work():
+                try:
+                    res = refine(text, "ai")
+                except Exception as exc:  # noqa: BLE001 - the refiner should not raise; keep the text anyway
+                    from omonflow.refinement.refiner import RefineResult
+                    res = RefineResult(text, "raw", "ai", fallback_reason=f"Unexpected error ({exc}).")
+                self._refined.emit(gen, res)
+
+            threading.Thread(target=work, name="omonflow-refine", daemon=True).start()
+            return
+        if mode != "raw":
+            try:
+                res = self.refiner.refine(text, mode)
+                self._use_refined(res)
+            except Exception:  # noqa: BLE001
+                LOG.warning("local refinement failed; inserting the transcript as is", exc_info=True)
         self._fire("text")
-        self._insert(text, opts)
+        self._insert(self.transcript, self.options())
+
+    def _on_refined(self, gen: int, res) -> None:
+        if gen != self._gen or self.state != State.REFINING:
+            return  # cancelled: the raw transcript is already kept in ERROR
+        self._use_refined(res)
+        if res.fell_back:
+            self.notice.emit("warning", f"AI refinement: {res.fallback_reason} Inserted the cleaned text instead.")
+            self._fire("refine_failed")
+        else:
+            self._fire("refined")
+        self._insert(self.transcript, self.options())
+
+    def _use_refined(self, res) -> None:
+        self.last_refine = res
+        if not res.text or res.text == self.transcript:
+            return
+        self.transcript = res.text
+        hist = self.history()
+        if hist is not None and self._history_id is not None:
+            try:
+                hist.set_text(self._history_id, res.text, raw_text=self._raw_text)
+            except Exception:  # noqa: BLE001
+                LOG.warning("could not update history", exc_info=True)
+
+    def _history_outcome(self, outcome: str) -> None:
+        hist = self.history()
+        if hist is not None and self._history_id is not None:
+            try:
+                hist.set_outcome(self._history_id, outcome)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _insert(self, text: str, opts: dict) -> None:
         gen = self._gen

@@ -63,9 +63,10 @@ class Audio(StubAudioBackend):
         return rec
 
 
-def make(transcriber, inserter=None, history=None, activity=True):
+def make(transcriber, inserter=None, history=None, activity=True, refiner=None):
     o = Orchestrator(Audio(activity), FAST, transcriber=transcriber, inserter=inserter or FakeInserter(),
-                     history=(lambda: history), options=lambda: {"strategy": "auto", "model": "small"})
+                     history=(lambda: history), options=lambda: {"strategy": "auto", "model": "small"},
+                     refiner=refiner)
     o.seen = []
     o.state_changed.connect(o.seen.append)
     return o
@@ -219,3 +220,92 @@ def test_verified_insertion_clears_text_immediately(qapp):
     dictate(qapp, o)
     wait_until(qapp, lambda: o.state == State.SUCCESS, 5000)
     assert o.transcript is None and o.widget_label is None
+
+
+# ------------------------------------------------------------------ refinement (M07, SPEC §5.3 / §8 / §10)
+class FakeRefiner:
+    def __init__(self, mode, result=None, delay_s=0.0):
+        self._mode, self.result, self.delay_s = mode, result, delay_s
+        self.calls = []
+
+    def mode(self):
+        return self._mode
+
+    def refine(self, text, mode):
+        from omonflow.refinement.refiner import local_refine
+        self.calls.append((text, mode))
+        if mode != "ai":
+            return local_refine(text, mode)
+        time.sleep(self.delay_s)
+        return self.result
+
+
+def _ai(text, reason=""):
+    from omonflow.refinement.refiner import RefineResult
+    return RefineResult(text, "clean" if reason else "ai", "ai", 300.0, reason)
+
+
+def test_clean_mode_is_applied_without_a_refining_state(qapp, tmp_path):
+    h = History(tmp_path / "h.db")
+    ins = FakeInserter()
+    o = make(FakeTranscriber(["um so the the build is green"]), ins, h, refiner=FakeRefiner("clean"))
+    dictate(qapp, o)
+    wait_until(qapp, lambda: o.state == State.IDLE, 5000)
+    assert ins.inserted == ["So the build is green."]
+    assert "REFINING" not in o.seen
+    e = h.list()[0]
+    assert (e.text, e.raw_text, e.outcome) == ("So the build is green.", "um so the the build is green", "inserted")
+
+
+def test_raw_mode_inserts_the_transcript(qapp):
+    ins = FakeInserter()
+    o = make(FakeTranscriber(["um the the test"]), ins, refiner=FakeRefiner("raw"))
+    dictate(qapp, o)
+    wait_until(qapp, lambda: o.state == State.IDLE, 5000)
+    assert ins.inserted == ["um the the test"]
+
+
+def test_ai_refinement_goes_through_refining(qapp, tmp_path):
+    h = History(tmp_path / "h.db")
+    ins = FakeInserter()
+    o = make(FakeTranscriber(["saya cek dulu then I deploy"]), ins, h,
+             refiner=FakeRefiner("ai", _ai("Saya cek dulu, then I deploy.")))
+    notices = []
+    o.notice.connect(lambda sev, t: notices.append(sev))
+    dictate(qapp, o)
+    wait_until(qapp, lambda: o.state == State.IDLE, 5000)
+    assert ins.inserted == ["Saya cek dulu, then I deploy."]
+    i = o.seen.index("REFINING")
+    assert o.seen[i - 1] == "TRANSCRIBING" and o.seen[i + 1] == "INSERTING"
+    assert "warning" not in notices
+    assert h.list()[0].raw_text == "saya cek dulu then I deploy"
+
+
+def test_ai_failure_inserts_clean_text_with_a_notice(qapp):
+    ins = FakeInserter()
+    o = make(FakeTranscriber(["um the the server is down"]), ins,
+             refiner=FakeRefiner("ai", _ai("The server is down.", "No answer within 10 s.")))
+    notices = []
+    o.notice.connect(lambda sev, t: notices.append((sev, t)))
+    dictate(qapp, o)
+    wait_until(qapp, lambda: o.state == State.IDLE, 5000)
+    assert ins.inserted == ["The server is down."]
+    assert any(sev == "warning" and "No answer within 10 s." in t for sev, t in notices)
+    assert o.sm.history[[e for _s, e, _n in o.sm.history].index("refine_failed")][2] == State.INSERTING
+
+
+def test_cancel_during_refinement_keeps_raw_text_and_inserts_nothing(qapp, tmp_path):
+    h = History(tmp_path / "h.db")
+    ins = FakeInserter()
+    o = make(FakeTranscriber(["um the the raw words"]), ins, h,
+             refiner=FakeRefiner("ai", _ai("The raw words."), delay_s=0.4))
+    dictate(qapp, o)
+    wait_until(qapp, lambda: o.state == State.REFINING, 5000)
+    assert o.can_cancel() and o.cancel()
+    assert o.state == State.ERROR and o.transcript == "um the the raw words"
+    qapp.processEvents()
+    time.sleep(0.6)  # the late AI result must be ignored
+    qapp.processEvents()
+    assert o.state == State.ERROR and ins.inserted == []
+    e = h.list()[0]
+    assert (e.text, e.outcome) == ("um the the raw words", "cancelled")

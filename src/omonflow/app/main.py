@@ -39,10 +39,44 @@ def setup_logging(level: str) -> None:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 
+class AppRefiner:
+    """Refinement settings → orchestrator. AI is used only when a server is set
+    and, for a server that is not this computer, the user agreed to send text there."""
+
+    def __init__(self, app: "OmonFlowApp") -> None:
+        self.app = app
+
+    def mode(self) -> str:
+        s = self.app.settings
+        if s.refine_mode != "ai":
+            return s.refine_mode if s.refine_mode in ("raw", "clean") else "clean"
+        problem = ai_problem(s)
+        if problem:
+            self.app._notice("warning", f"AI refinement is not ready ({problem}); used Clean instead.")
+            return "clean"
+        return "ai"
+
+    def refine(self, text: str, mode: str):
+        from omonflow.refinement.refiner import ai_refine, local_refine
+        if mode != "ai":
+            return local_refine(text, mode)
+        return ai_refine(text, self.app.ai_config())
+
+
+def ai_problem(s) -> str | None:
+    from omonflow.refinement.ai import endpoint_location, normalize_base_url
+    url = normalize_base_url(s.ai_base_url)
+    if not url:
+        return "no server is set"
+    if endpoint_location(url) != "local" and s.ai_consent_url != url:
+        return "sending text to this server has not been confirmed"
+    return None
+
+
 class OmonFlowApp:
     def __init__(self, app: QApplication, store: SettingsStore, server: InstanceServer | None,
                  shortcut_backend=None, audio=None, delays: dict | None = None, whisper=None,
-                 start_engine: bool = True, inserter=None, transcriber=None) -> None:
+                 start_engine: bool = True, inserter=None, transcriber=None, keys=None) -> None:
         self.app = app
         self.store = store
         self.settings = store.load()
@@ -76,16 +110,19 @@ class OmonFlowApp:
                 LOG.warning("text insertion unavailable", exc_info=True)
         self.inserter = inserter
         self._history = None
+        from omonflow.refinement.secrets import KeyStore
+        self.keys = keys if keys is not None else KeyStore()
         self.orch = Orchestrator(
             self.audio, delays, ready_timeout_ms=self.settings.mic_timeout_ms, permission_check=permission,
             transcriber=transcriber if transcriber is not None else (self._transcribe if start_engine else None),
-            inserter=self.inserter, history=self.history, options=self._options)
+            inserter=self.inserter, history=self.history, options=self._options, refiner=AppRefiner(self))
         self.widget = FloatingWidget(can_cancel=self.orch.can_cancel,
                                      always_on_top=self.settings.always_on_top)
         self.tray = TrayController()
         self.shortcut = ShortcutService(shortcut_backend) if shortcut_backend else ShortcutService()
         self.settings_win = SettingsWindow(self.settings, self.diagnostics(), audio_info=self.audio_info,
-                                           whisper=self.whisper, insertion_info=self.insertion_info)
+                                           whisper=self.whisper, insertion_info=self.insertion_info,
+                                           keys=self.keys, ai_config=self.ai_config)
 
         # --- wiring: UI sends intents, orchestrator owns state
         self.widget.intent.connect(self._widget_intent)
@@ -282,6 +319,16 @@ class OmonFlowApp:
     def _options(self) -> dict:
         return {"strategy": self.settings.insertion_strategy, "restore_clipboard": self.settings.restore_clipboard,
                 "model": self.settings.whisper_model}
+
+    def ai_config(self, **overrides):
+        from omonflow.refinement.ai import AIConfig
+        s = self.settings
+        cfg = AIConfig(base_url=s.ai_base_url, model=s.ai_model, api_key=self.keys.get(s.ai_base_url),
+                       timeout_s=float(s.ai_timeout_s), temperature=float(s.ai_temperature),
+                       instructions=s.ai_instructions, language=s.language)
+        for k, v in overrides.items():
+            setattr(cfg, k, v)
+        return cfg
 
     def history(self):
         if not self.settings.history_enabled:

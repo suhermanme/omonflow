@@ -68,6 +68,14 @@ class Settings:
     insertion_strategy: str = "auto"      # auto | paste | type
     restore_clipboard: bool = True
     history_enabled: bool = True
+    # Text refinement (SPEC §10). No AI server is configured by default.
+    refine_mode: str = "clean"            # raw | clean | ai
+    ai_base_url: str = ""                 # OpenAI-compatible server, e.g. http://localhost:11434/v1
+    ai_model: str = ""                    # "" = first model the server lists
+    ai_timeout_s: int = 10
+    ai_temperature: float = 0.0
+    ai_instructions: str = ""             # optional style preferences
+    ai_consent_url: str = ""              # server the user agreed to send text to (not on this computer)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Settings":
