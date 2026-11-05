@@ -1,0 +1,8 @@
+target/
+.venv/
+__pycache__/
+*.so
+*.pyd
+*.dylib
+.DS_Store
+tools/validation/work/

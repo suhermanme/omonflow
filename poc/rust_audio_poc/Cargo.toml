@@ -1,0 +1,20 @@
+[package]
+name = "omonflow_audio_poc"
+version = "0.0.1"
+edition = "2021"
+publish = false
+description = "M01 proof of concept: continuous capture + rolling pre-buffer exposed to Python"
+license = "MIT"
+
+[lib]
+name = "omonflow_audio_poc"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+cpal = "0.18"
+rtrb = "0.4"
+pyo3 = { version = "0.30", optional = true }
+
+[features]
+# Off for `cargo test` (pure Rust); on when built as a Python extension.
+python = ["pyo3/extension-module"]
