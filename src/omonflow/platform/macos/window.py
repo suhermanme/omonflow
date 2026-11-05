@@ -84,3 +84,17 @@ def frontmost_app() -> str | None:
         return app.bundleIdentifier() if app else None
     except Exception:  # noqa: BLE001
         return None
+
+
+def bring_to_front() -> None:
+    """Activates OmonFlow so a window it opens on its own (not after a click) is in front."""
+    try:
+        from AppKit import NSApplication
+
+        app = NSApplication.sharedApplication()
+        if hasattr(app, "activate"):
+            app.activate()
+        else:
+            app.activateIgnoringOtherApps_(True)
+    except Exception:  # noqa: BLE001 - cosmetic
+        pass

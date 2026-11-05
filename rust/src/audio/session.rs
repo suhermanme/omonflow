@@ -25,7 +25,9 @@ impl Params {
     pub fn new(rate: u32) -> Self {
         Self {
             rate,
-            warmup_cap_ms: 300,
+            // Bluetooth headsets deliver exact zeros for 0.5–1.5 s while macOS switches
+            // them to the headset (call) profile; readiness waits for real signal.
+            warmup_cap_ms: 2500,
             max_seconds: 600,
             floor_windows: 15,
             activity_factor: 4.0,
@@ -206,8 +208,18 @@ mod tests {
     #[test]
     fn warmup_cap_gives_ready_with_warning() {
         let mut s = Session::new(Params::new(16000));
-        let f = s.push(&vec![0.0; 16000 * 3 / 10]);
+        // A Bluetooth headset switching profile: 1.5 s of exact zeros is not "ready" yet.
+        assert!(!s.push(&vec![0.0; 16000 * 15 / 10]).became_ready);
+        let f = s.push(&vec![0.0; 16000]);
         assert!(f.became_ready && s.silent_warning);
+    }
+
+    #[test]
+    fn bluetooth_silence_then_signal_is_ready_without_warning() {
+        let mut s = Session::new(Params::new(16000));
+        assert!(!s.push(&vec![0.0; 16000]).became_ready);
+        let f = s.push(&vec![0.01; 160]);
+        assert!(f.became_ready && !s.silent_warning);
     }
 
     #[test]

@@ -14,7 +14,7 @@ import numpy as np
 @dataclass
 class Params:
     rate: int
-    warmup_cap_ms: int = 300
+    warmup_cap_ms: int = 2500  # Bluetooth headsets: up to ~1.5 s of exact zeros while switching profile
     max_seconds: int = 600
     floor_windows: int = 15
     activity_factor: float = 4.0

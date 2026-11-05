@@ -225,8 +225,8 @@ class MacInserter:
             res = InsertResult("not_started", error=f"{getattr(target, 'name', None) or 'The target app'} is no "
                                                     "longer the active app; nothing was inserted.")
         res.ms = round((time.perf_counter() - t0) * 1000, 1)
-        LOG.info("insert: %s via %s verified=%s (%s ms) %s", res.outcome, res.method, res.verified, res.ms,
-                 res.error or "")
+        LOG.info("insert into %s: %s via %s verified=%s (%s ms) %s", getattr(target, "bundle_id", None) or "?",
+                 res.outcome, res.method, res.verified, res.ms, res.error or "")  # app id only, never text
         return res
 
     def _insert(self, text, target, strategy, restore_clipboard, on_start) -> InsertResult:

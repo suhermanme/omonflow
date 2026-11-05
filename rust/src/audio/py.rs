@@ -63,7 +63,7 @@ impl AudioCore {
 impl AudioCore {
     /// `fake`: optional dict for a synthetic source (tests/CI), keys of FakeSpec.
     #[new]
-    #[pyo3(signature = (device_id=None, warmup_cap_ms=300, max_seconds=600, fake=None))]
+    #[pyo3(signature = (device_id=None, warmup_cap_ms=2500, max_seconds=600, fake=None))]
     fn new(device_id: Option<String>, warmup_cap_ms: u32, max_seconds: u32, fake: Option<&Bound<'_, PyDict>>) -> PyResult<Self> {
         let source = match fake {
             None => Source::Device(device_id),
@@ -155,8 +155,10 @@ impl AudioCore {
     /// retired and DeviceTimeout raised; the next start uses a fresh worker.
     fn wait_until_ready<'py>(&self, py: Python<'py>, timeout_ms: u64) -> PyResult<Bound<'py, PyDict>> {
         let shared = self.current_shared().ok_or_else(|| AudioError::new_err("no capture in progress"))?;
+        let warmup_cap = self.warmup_cap_ms;
         let phase = py.detach(|| {
-            let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+            let mut deadline = Instant::now() + Duration::from_millis(timeout_ms);
+            let mut extended = false;
             let mut inner = shared.inner.lock().unwrap();
             loop {
                 if matches!(inner.phase, Phase::Ready | Phase::Active | Phase::Stopped | Phase::Failed)
@@ -164,7 +166,15 @@ impl AudioCore {
                 {
                     return inner.phase;
                 }
-                let left = deadline.saturating_duration_since(Instant::now());
+                let mut left = deadline.saturating_duration_since(Instant::now());
+                if left.is_zero() && inner.phase == Phase::Warming && !extended {
+                    // The device is open and delivering samples (still digital silence, e.g. a
+                    // Bluetooth headset switching profile): readiness is bounded by the warm-up
+                    // cap, so a slow open must not turn into a timeout.
+                    extended = true;
+                    deadline = Instant::now() + Duration::from_millis(warmup_cap as u64 + 500);
+                    left = deadline.saturating_duration_since(Instant::now());
+                }
                 if left.is_zero() {
                     return inner.phase;
                 }

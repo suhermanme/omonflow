@@ -9,7 +9,8 @@ import os
 import signal
 import sys
 
-from PySide6.QtCore import QPoint, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 import omonflow
@@ -183,6 +184,8 @@ class OmonFlowApp:
             self.whisper.refresh_catalog()
             self.whisper.ensure_running(self.settings.whisper_model, device=self.settings.whisper_backend,
                                         threads=self.settings.whisper_threads)
+        if start_engine:
+            QTimer.singleShot(800, self.require_accessibility)
         if store.recovered_from:
             self._notice("warning", f"Settings were unreadable and have been reset. Backup: {store.recovered_from}")
 
@@ -367,6 +370,78 @@ class OmonFlowApp:
         if self.inserter is not None and hasattr(self.inserter, "request_permission"):
             self.inserter.request_permission()
 
+    # ------------------------------------------------------------ Accessibility (required on macOS)
+    def require_accessibility(self) -> None:
+        """At launch: without Accessibility OmonFlow can only copy text, so ask macOS
+        right away and explain; the window closes by itself once access is granted."""
+        ins = self.inserter
+        if sys.platform != "darwin" or ins is None or not hasattr(ins, "trusted") or ins.trusted():
+            return
+        LOG.info("accessibility not granted: asking macOS")
+        ins.request_permission()  # macOS's own prompt (shown once per app identity)
+        box = QMessageBox()
+        box.setWindowTitle("OmonFlow needs Accessibility access")
+        box.setIcon(QMessageBox.Information)
+        box.setText("OmonFlow needs Accessibility access to type your dictation into other apps.")
+        frozen = getattr(sys, "frozen", False)
+        box.setInformativeText(
+            "In System Settings → Privacy & Security → Accessibility, turn on OmonFlow. "
+            "This window closes by itself once access is granted.\n\n"
+            + ("If OmonFlow is already listed but switched on, it belongs to an older build: click "
+               "\u201cReset and Ask Again\u201d, then turn the new entry on." if frozen else
+               "When running from a terminal, the permission belongs to the terminal app."))
+        open_btn = box.addButton("Open Accessibility Settings", QMessageBox.AcceptRole)
+        reset_btn = box.addButton("Reset and Ask Again", QMessageBox.ActionRole) if frozen else None
+        box.addButton("Later", QMessageBox.RejectRole)
+        box.setModal(False)
+        box.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+
+        def clicked(btn) -> None:
+            if btn is open_btn:
+                from omonflow.platform.macos.insert import ACCESSIBILITY_URL
+                QDesktopServices.openUrl(QUrl(ACCESSIBILITY_URL))
+                QTimer.singleShot(0, box.show)  # keep the instructions visible
+            elif reset_btn is not None and btn is reset_btn:
+                self._reset_accessibility_entry()
+                QTimer.singleShot(0, box.show)
+
+        box.buttonClicked.connect(clicked)
+        box.show()
+        from omonflow.platform.macos.window import bring_to_front
+        bring_to_front()
+        box.raise_()
+        box.activateWindow()
+        self._ax_box = box
+        self._ax_timer = QTimer(self.widget)
+        self._ax_timer.setInterval(1500)
+        self._ax_timer.timeout.connect(self._poll_accessibility)
+        self._ax_timer.start()
+
+    def _poll_accessibility(self) -> None:
+        if self.inserter is None or not self.inserter.trusted():
+            return
+        self._ax_timer.stop()
+        if getattr(self, "_ax_box", None) is not None:
+            self._ax_box.done(0)
+            self._ax_box = None
+        LOG.info("accessibility granted")
+        self._notice("info", "Accessibility access granted: OmonFlow can now insert text.")
+        self.settings_win.refresh_insertion()
+
+    def _reset_accessibility_entry(self) -> None:
+        """Removes OmonFlow's own (stale) Accessibility entry so macOS asks again."""
+        import subprocess
+
+        try:
+            subprocess.run(["tccutil", "reset", "Accessibility", omonflow.APP_ID], check=True,
+                           capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError) as exc:
+            LOG.warning("tccutil reset failed: %s", exc)
+            self._notice("error", "Could not reset the Accessibility entry. Remove OmonFlow in System Settings "
+                                  "with \u2013, then add it again with +.")
+            return
+        self.inserter.request_permission()
+
     # ------------------------------------------------------------ speech recognition
     def _model_selected(self, model_id: str) -> None:
         # A hand-picked model makes the profile "custom" (profiles never override choices).
@@ -493,6 +568,10 @@ class OmonFlowApp:
 
     def dispose(self) -> None:
         """Release everything in a safe order (also used by tests)."""
+        if getattr(self, "_ax_timer", None) is not None:
+            self._ax_timer.stop()
+        if getattr(self, "_ax_box", None) is not None:
+            self._ax_box.done(0)
         self.whisper.shutdown()  # stops only the OmonFlow-owned whisper-server
         if self._history is not None:
             self._history.close()

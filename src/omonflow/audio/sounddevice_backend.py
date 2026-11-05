@@ -143,7 +143,7 @@ class SoundDeviceAudio:
     name = "python"
     degraded = True
 
-    def __init__(self, device_id: str | None = None, warmup_cap_ms: int = 300, max_seconds: int = 600,
+    def __init__(self, device_id: str | None = None, warmup_cap_ms: int = 2500, max_seconds: int = 600,
                  open_stream=None) -> None:
         self.device_id = device_id
         self.warmup_cap_ms = warmup_cap_ms
@@ -185,8 +185,10 @@ class SoundDeviceAudio:
         if run is None:
             raise I.AudioError("no capture in progress")
         with run.cv:
-            run.cv.wait_for(lambda: run.phase in ("ready", "active", "stopped", "failed") or run.cancel.is_set(),
-                            timeout_ms / 1000)
+            done = lambda: run.phase in ("ready", "active", "stopped", "failed") or run.cancel.is_set()  # noqa: E731
+            run.cv.wait_for(done, timeout_ms / 1000)
+            if run.phase == "warming":  # open and delivering silence: readiness is bounded by the warm-up cap
+                run.cv.wait_for(done, (self.warmup_cap_ms + 500) / 1000)
             phase = run.phase
         if phase in ("ready", "active"):
             return {**{k: run.timing.get(k) for k in ("open_ms", "first_audio_ms", "ready_ms", "warmup_ms")},

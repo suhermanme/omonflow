@@ -102,3 +102,14 @@ It is deliberately strict. A legitimate spelling fix (e.g. a misheard word corre
 uv run pytest -q                                                        # 260 tests, 29 skipped
 OMONFLOW_LLM_URL=http://192.168.3.243:8080 uv run pytest -q -s tests/test_refinement.py -k live
 ```
+
+## Fixes from owner testing (2026-11-05, after the M07 report)
+
+| Owner report | Cause (from the log) | Fix | Verified |
+|---|---|---|---|
+| Dictation failed with a Bluetooth headset (Sony WH-1000XM5) while YouTube was playing | macOS switches the headset to its call profile when the mic opens: opening took up to 2.4 s, then the mic delivered **0.6–1.5 s of exact silence**. OmonFlow showed "Speak now" after a 0.3 s cap, so the first words were lost (one dictation kept only 0.46 s; another found no speech) | Readiness waits for real signal up to 2.5 s (built-in and wired mics are unaffected: they deliver sound at once); a mic that is open and warming up no longer counts against the "not responding" limit. Both audio engines | Simulated profile switch (1.5 s open + 1.5 s silence) in both engines; Rust unit tests; owner retest pending |
+| The new Desktop build only copied text | The rebuilt (ad-hoc) app had no Accessibility permission yet | At every launch without Accessibility, OmonFlow triggers macOS's prompt and opens a window with *Open Accessibility Settings* and, in the packaged app, *Reset and Ask Again* (removes OmonFlow's stale entry from an older build via `tccutil`); it closes by itself once access is granted | Tests with a fake permission state; owner retest pending |
+
+Also: the insertion log line now names the target app's bundle id (never text), to diagnose "inserted but not shown" reports.
+
+**Bluetooth note:** while the headset microphone is in use, macOS plays all audio (e.g. YouTube) in the headset's lower call quality. That's how Bluetooth headsets work; choosing the Mac's built-in microphone in Settings → Audio Input avoids it.

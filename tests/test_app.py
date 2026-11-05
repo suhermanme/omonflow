@@ -158,3 +158,41 @@ def test_settings_never_contain_the_api_key(make_app, config_dir):
     assert a.keys.get("http://localhost:8080") == "sk-very-secret"
     assert a.ai_config().api_key == "sk-very-secret"
     assert "sk-very-secret" not in a.store.path.read_text()
+
+
+# ------------------------------------------------------------------ Accessibility required at launch (macOS)
+class AXInserter:
+    name = "fake-macos"
+
+    def __init__(self):
+        self.ok, self.asked = False, 0
+
+    def trusted(self):
+        return self.ok
+
+    def request_permission(self):
+        self.asked += 1
+
+    def permission(self):
+        return {"accessibility": self.ok}
+
+
+@pytest.mark.skipif(__import__("sys").platform != "darwin", reason="macOS only")
+def test_missing_accessibility_asks_macos_and_closes_when_granted(qapp, make_app):
+    a = make_app()
+    a.inserter = AXInserter()
+    a.require_accessibility()
+    assert a.inserter.asked == 1 and a._ax_box.isVisible()
+    a._ax_timer.setInterval(20)
+    a.inserter.ok = True
+    wait_until(qapp, lambda: a._ax_box is None)
+    assert not a._ax_timer.isActive()
+
+
+@pytest.mark.skipif(__import__("sys").platform != "darwin", reason="macOS only")
+def test_granted_accessibility_shows_nothing(make_app):
+    a = make_app()
+    a.inserter = AXInserter()
+    a.inserter.ok = True
+    a.require_accessibility()
+    assert a.inserter.asked == 0 and getattr(a, "_ax_box", None) is None

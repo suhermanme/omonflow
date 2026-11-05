@@ -29,7 +29,7 @@ class RustAudio:
     name = "rust"
     degraded = False
 
-    def __init__(self, device_id: str | None = None, fake: dict | None = None, warmup_cap_ms: int = 300,
+    def __init__(self, device_id: str | None = None, fake: dict | None = None, warmup_cap_ms: int = 2500,
                  max_seconds: int = 600) -> None:
         from omonflow import _core
 

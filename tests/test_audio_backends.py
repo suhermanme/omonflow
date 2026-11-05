@@ -77,6 +77,21 @@ def test_silent_device_ready_with_warning(kind):
 
 
 @pytest.mark.parametrize("kind", BACKENDS)
+def test_bluetooth_headset_profile_switch(kind):
+    """Seen with a WH-1000XM5: a slow open (up to 2.4 s) followed by ~1.5 s of exact
+    zeros while macOS switches the headset to its call profile. "Speak now" must wait
+    for real signal (first words were lost with a 300 ms cap), and a slow but working
+    open must not become a timeout."""
+    a = make(kind, open_delay_ms=1500, warmup_zero_ms=1500, speech_after_ms=1700)
+    a.start_capture()
+    info = a.wait_until_ready(2000)  # deadline passes while the device is warming
+    assert not info["silent_warning"]
+    assert 1450 <= info["warmup_ms"] <= 1600, info
+    a.cancel_capture()
+    a.shutdown()
+
+
+@pytest.mark.parametrize("kind", BACKENDS)
 def test_cancel_discards_and_closes(kind):
     a = make(kind)
     a.start_capture()
